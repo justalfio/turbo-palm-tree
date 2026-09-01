@@ -1,3 +1,33 @@
+# CALCOLO FOO, RRA e pulizia dataset
+library(tidyverse)
+
+slo <- read_delim("Sloveniawolves FILE_DEFINITIVO.csv", delim = ";", 
+                   locale = locale(encoding = "UTF-8"))
+cro <- read_delim("Croatian wolves FILE DEFINITIVO.csv", delim = ";", 
+                   locale = locale(encoding = "UTF-8"))
+
+# Converto da formato largo (specie x campione) a formato lungo
+slo_long <- slo %>%
+  select(-rank) %>%
+  pivot_longer(-scientific_name, names_to = "Sample_ID", values_to = "reads") %>%
+  mutate(Popolazione = "Slovenia")
+
+cro_long <- cro %>%
+  select(-rank) %>%
+  pivot_longer(-scientific_name, names_to = "Sample_ID", values_to = "reads") %>%
+  mutate(Popolazione = "Croazia")
+
+grezzi <- bind_rows(slo_long, cro_long)
+
+nrow(grezzi)
+n_distinct(grezzi$Sample_ID)
+
+
+
+
+
+
+
 # =========================================================================
 # PIPELINE INTEGRATA DIETA LUPO: SLOVENIA VS CROAZIA
 # PARTE 1: Grafici di composizione della dieta (FOO% e RRA% - Stile Jura)
