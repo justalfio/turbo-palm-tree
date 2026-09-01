@@ -315,3 +315,101 @@ print("==================================================")
 print(summary(simper_risultato))
 
 # Fine del Master Script
+# ==============================================================================
+# ATTO 1 ESTESO — Selezione della preda principale, con Cinghiale integrato
+# Analisi gerarchica a due livelli, come discusso con Marta.
+# Autosufficiente: nessuna dipendenza da script precedenti.
+# ==============================================================================
+
+library(readr)
+library(dplyr)
+
+# ==============================================================================
+# 1. CARICAMENTO E PREPARAZIONE DATI
+# ==============================================================================
+community <- read_csv2("Community_Matrix_SloCro.csv", locale = locale(decimal_mark = ","))
+ndvi      <- read_csv2("Wolf_NDVI_Dynamic_Dinaric.csv", locale = locale(decimal_mark = ","))
+
+df <- community %>%
+  inner_join(ndvi %>% select(Sample, ELEV_mean, NDVI_mean, NDVI_sd),
+             by = c("Sample_ID" = "Sample"))
+
+stopifnot(nrow(df) == 100)
+
+# Standardizzazione predittori (coerente con l'analisi Python gia' validata)
+df$ELEV_mean_z <- as.numeric(scale(df$ELEV_mean))
+df$NDVI_mean_z <- as.numeric(scale(df$NDVI_mean))
+df$NDVI_sd_z   <- as.numeric(scale(df$NDVI_sd))
+
+# ==============================================================================
+# 2. UNIVERSO DI ANALISI — campioni con almeno una tra Cervo/Capriolo/Cinghiale
+#    come specie dominante (max %RRA tra le tre)
+# ==============================================================================
+df_sub <- df %>%
+  filter(`Cervus elaphus` > 0 | `Capreolus capreolus` > 0 | `Sus scrofa` > 0) %>%
+  rowwise() %>%
+  mutate(
+    dominante = c("Cervus elaphus", "Capreolus capreolus", "Sus scrofa")[
+      which.max(c_across(c(`Cervus elaphus`, `Capreolus capreolus`, `Sus scrofa`)))
+    ]
+  ) %>%
+  ungroup()
+
+cat("N campioni nell'universo a 3 prede:", nrow(df_sub), "\n")
+cat("Distribuzione preda dominante:\n")
+print(table(df_sub$dominante))
+
+# ==============================================================================
+# 3. LIVELLO 1 — Cinghiale-dominante vs Cervidi-dominante (Cervo+Capriolo insieme)
+# ==============================================================================
+df_sub$is_boar_dominant <- as.integer(df_sub$dominante == "Sus scrofa")
+
+modello_livello1 <- glm(
+  is_boar_dominant ~ ELEV_mean_z + NDVI_mean_z,
+  data = df_sub,
+  family = binomial(link = "logit")
+)
+
+cat("\n", strrep("=", 70), "\n")
+cat("LIVELLO 1 — Cinghiale-dominante vs Cervidi-dominante\n")
+cat(strrep("=", 70), "\n")
+print(summary(modello_livello1))
+cat("\nOdds Ratio e IC 95%:\n")
+print(exp(cbind(OR = coef(modello_livello1), confint(modello_livello1))))
+
+# ==============================================================================
+# 4. LIVELLO 2 — dentro i Cervidi: Cervo vs Capriolo (gia' noto, ricalcolato
+#    qui sul sotto-campione corretto per coerenza con la struttura gerarchica)
+# ==============================================================================
+df_cervidi <- df_sub %>% filter(dominante != "Sus scrofa")
+df_cervidi$is_cervo_dominant <- as.integer(df_cervidi$dominante == "Cervus elaphus")
+
+modello_livello2 <- glm(
+  is_cervo_dominant ~ ELEV_mean_z + NDVI_mean_z,
+  data = df_cervidi,
+  family = binomial(link = "logit")
+)
+
+cat("\n", strrep("=", 70), "\n")
+cat("LIVELLO 2 — dentro i Cervidi: Cervo vs Capriolo\n")
+cat(strrep("=", 70), "\n")
+print(summary(modello_livello2))
+cat("\nOdds Ratio e IC 95%:\n")
+print(exp(cbind(OR = coef(modello_livello2), confint(modello_livello2))))
+
+# ==============================================================================
+# 5. CONTROLLO SUPPLEMENTARE (documentato, non nel modello principale) —
+#    NDVI_sd come predittore del Cinghiale: testato su richiesta, risultato
+#    non significativo (p~0.93-0.96), NDVI_sd medio identico con/senza
+#    cinghiale in dieta. Non incluso nel modello finale: l'eterogeneita'
+#    ambientale non discrimina il cinghiale, a differenza dell'elevazione.
+# ==============================================================================
+modello_check_ndvi_sd <- glm(
+  as.integer(`Sus scrofa` > 0) ~ NDVI_sd_z,
+  data = df,
+  family = binomial(link = "logit")
+)
+cat("\n", strrep("=", 70), "\n")
+cat("CONTROLLO — presenza Cinghiale ~ NDVI_sd (per documentazione, non nel modello finale)\n")
+cat(strrep("=", 70), "\n")
+print(summary(modello_check_ndvi_sd))
