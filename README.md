@@ -21,9 +21,60 @@ grezzi <- bind_rows(slo_long, cro_long)
 
 nrow(grezzi)
 n_distinct(grezzi$Sample_ID)
+grezzi <- grezzi %>%
+  group_by(Sample_ID) %>%
+  mutate(totale_grezzo = sum(reads)) %>%
+  ungroup() %>%
+  mutate(pct_grezza = if_else(totale_grezzo > 0, reads / totale_grezzo * 100, 0))
 
+# Quante osservazioni specie-campione vengono azzerate dalla soglia dell'1%?
+# (reads>0 ma sotto la soglia ecologica)
+sotto_soglia <- grezzi %>% filter(reads > 0 & pct_grezza < 1)
+nrow(sotto_soglia)
+print(sotto_soglia)
 
+# Applico la soglia: azzero le read sotto l'1%, poi ricalcolo il totale
+# "pulito" e la percentuale finale su quel nuovo totale
+grezzi <- grezzi %>%
+  mutate(reads_filtrate = if_else(pct_grezza < 1, 0, reads)) %>%
+  group_by(Sample_ID) %>%
+  mutate(totale_filtrato = sum(reads_filtrate)) %>%
+  ungroup() %>%
+  mutate(RRA_percentuale = if_else(totale_filtrato > 0, reads_filtrate / totale_filtrato * 100, 0))
 
+# Verifica: per ogni campione con almeno una read valida, l'RRA deve sommare a 100
+controllo_somme <- grezzi %>%
+  group_by(Sample_ID) %>%
+  summarise(somma_RRA = sum(RRA_percentuale))
+summary(controllo_somme$somma_RRA)
+rra_pop <- grezzi %>%
+  group_by(Popolazione, scientific_name) %>%
+  summarise(RRA_percentuale = mean(RRA_percentuale), .groups = "drop")
+
+print(rra_pop, n = Inf)
+foo_pop <- grezzi %>%
+  group_by(Popolazione, scientific_name) %>%
+  summarise(FOO_percentuale = mean(RRA_percentuale > 0) * 100, .groups = "drop")
+
+print(foo_pop, n = Inf)
+
+# calcolo indice di pianka e di levins
+rra_matrice <- rra_pop %>%
+  pivot_wider(names_from = scientific_name, values_from = RRA_percentuale, values_fill = 0)
+
+levins_finale <- rra_matrice %>%
+  rowwise() %>%
+  mutate(
+    B = 1 / sum(c_across(-Popolazione)^2 / 10000),
+    B_A = (B - 1) / (10 - 1)
+  ) %>%
+  select(Popolazione, B_A)
+print(levins_finale)
+
+p_slo <- as.numeric(rra_matrice[rra_matrice$Popolazione=="Slovenia", -1]) / 100
+p_cro <- as.numeric(rra_matrice[rra_matrice$Popolazione=="Croazia", -1]) / 100
+pianka_finale <- sum(p_slo * p_cro) / sqrt(sum(p_slo^2) * sum(p_cro^2))
+print(pianka_finale)
 
 
 
@@ -256,71 +307,7 @@ matrice_prede <- df %>% select(-Sample_ID, -Popolazione)
 # Forziamo a numerico per evitare conflitti nel calcolo delle distanze
 matrice_prede <- as.data.frame(lapply(matrice_prede, as.numeric))
 
-# 3. CALCOLO NMDS (Non-metric Multidimensional Scaling)
-# Calcolo la distanza di Bray-Curtis (standard per la dieta) e proietto in 2D (k=2)
-# Impostiamo autotransform = FALSE per non alterare le nostre RRA% già standardizzate
-set.seed(123) 
-print("Calcolo dell'NMDS e dei vettori envfit in corso...")
-nmds_risultato <- metaMDS(matrice_prede, distance = "bray", k = 2, trymax = 100, trace = FALSE, autotransform = FALSE)
 
-# Estraggo le coordinate spaziali dei campioni nello spazio di ordinamento
-coordinate_nmds <- as.data.frame(scores(nmds_risultato, display = "sites"))
-coordinate_nmds$Popolazione <- metadati$Popolazione
-
-# 4. CALCOLO DEI VETTORI DELLE PREDE (ENVFIT - STILE KUNZ ET AL. / JURA)
-# Calcoliamo in quale direzione specifica le prede tirano le diete dei lupi
-set.seed(123)
-fit_prede <- envfit(nmds_risultato, matrice_prede, permutations = 999)
-
-# Estraggo le coordinate delle frecce tenendo solo le prede statisticamente significative (p < 0.05)
-frecce_prede <- as.data.frame(scores(fit_prede, display = "vectors"))
-frecce_prede$Preda <- rownames(frecce_prede)
-frecce_prede$p_value <- fit_prede$vectors$pvals
-frecce_prede <- frecce_prede %>% filter(p_value < 0.05) 
-
-# Moltiplichiamo le coordinate per allungare visivamente le frecce nel grafico per maggiore leggibilità
-moltiplicatore <- 1.5
-frecce_prede$NMDS1 <- frecce_prede$NMDS1 * moltiplicatore
-frecce_prede$NMDS2 <- frecce_prede$NMDS2 * moltiplicatore
-
-# 5. VISUALIZZAZIONE NMDS CON VETTORI TRAMITE GGPLOT2
-palette_nazioni <- c("Slovenia" = "#56B4E9", "Croazia" = "#E69F00")
-
-plot_nmds <- ggplot(coordinate_nmds, aes(x = NMDS1, y = NMDS2)) +
-  # Uso geom_jitter per sparpagliare leggermente i campioni con dieta monospecifica (es. 100% capriolo) 
-  # evitando che si sovrappongano perfettamente in un solo punto invisibile
-  geom_jitter(aes(color = Popolazione, fill = Popolazione), size = 2.5, alpha = 0.5, width = 0.05, height = 0.05) +
-  
-  # Ellissi di confidenza al 95% per visualizzare l'area di nicchia delle due popolazioni
-  stat_ellipse(aes(color = Popolazione, fill = Popolazione), geom = "polygon", alpha = 0.15, level = 0.95, linewidth = 0.8) + 
-  
-  # Frecce direzionali delle prede (Vettori significativi)
-  geom_segment(data = frecce_prede, aes(x = 0, y = 0, xend = NMDS1, yend = NMDS2), 
-               arrow = arrow(length = unit(0.3, "cm")), color = "black", linewidth = 0.8) +
-  # Etichette delle frecce tassonomiche
-  geom_text(data = frecce_prede, aes(x = NMDS1 * 1.1, y = NMDS2 * 1.1, label = Preda), 
-            color = "black", fontface = "italic", size = 4.5) +
-
-  scale_color_manual(values = palette_nazioni) +
-  scale_fill_manual(values = palette_nazioni) +
-  labs(
-    title = "NMDS - Diet Composition Driven by Key Prey",
-    subtitle = paste("2D Stress:", round(nmds_risultato$stress, 3), "| Arrows show significant prey vectors (p < 0.05)"), 
-    x = "NMDS 1",
-    y = "NMDS 2"
-  ) +
-  theme_bw() +
-  theme(
-    plot.title = element_text(face = "bold", size = 15, hjust = 0.5),
-    plot.subtitle = element_text(face = "italic", size = 11, hjust = 0.5, margin = margin(b=10)),
-    legend.position = "bottom",
-    legend.title = element_blank(),
-    legend.text = element_text(size = 12)
-  )
-
-# Mostro il grafico NMDS a schermo e lo esporto ad alta risoluzione
-print(plot_nmds)
-ggsave("Grafico_NMDS_Frecce_Paper.png", plot = plot_nmds, width = 9, height = 7, dpi = 300)
 
 # 6. PERMANOVA (Test Statistico Definitivo sulla dissimilarità trofica)
 # Verifico se la diversità spaziale osservata nell'NMDS è statisticamente significativa lungo il gradiente
@@ -343,6 +330,82 @@ print("==================================================")
 print("                RISULTATO SIMPER                  ")
 print("==================================================")
 print(summary(simper_risultato))
+# ==============================================================================
+# ANALISI DELLA DISPERSIONE MULTIVARIATA (BETADISPER) — versione corretta
+# Coerente con la trasformazione di Hellinger già usata nella PCoA/PERMANOVA
+# ufficiale della tesi (Sezione 2.5). Autosufficiente: nessuna dipendenza da
+# script precedenti o oggetti già in memoria.
+# ==============================================================================
+
+library(tidyverse)
+library(vegan)
+
+# ==============================================================================
+# 1. CARICAMENTO DATI
+# ==============================================================================
+dataset_lupo <- read_csv2("Community_Matrix_SloCro.csv",
+                           locale = locale(decimal_mark = ","),
+                           show_col_types = FALSE)
+
+dataset_lupo$Popolazione <- as.factor(dataset_lupo$Popolazione)
+
+taxa_cols <- c("Capreolus capreolus", "Caprinae", "Cervus elaphus", "Ovis aries",
+               "Rupicapra rupicapra", "Sus scrofa", "Bos", "Capra", "Lepus", "Ovis")
+
+# Rete di sicurezza per il parsing numerico (ridondante se read_csv2 ha già
+# interpretato correttamente il separatore decimale, ma innocua)
+for (col in taxa_cols) {
+  dataset_lupo[[col]] <- as.numeric(gsub(",", ".", dataset_lupo[[col]]))
+}
+
+matrice_prede <- dataset_lupo %>% select(all_of(taxa_cols))
+
+cat("N campioni:", nrow(matrice_prede), "\n")
+cat("N taxa:", ncol(matrice_prede), "\n")
+cat("Popolazioni:", paste(levels(dataset_lupo$Popolazione), collapse = ", "), "\n")
+
+# ==============================================================================
+# 2. TRASFORMAZIONE DI HELLINGER
+# Stessa trasformazione della PCoA/PERMANOVA ufficiale: Betadisper deve validare
+# le assunzioni dello STESSO test, quindi va calcolato sulla stessa matrice
+# trasformata, non sui dati grezzi.
+# ==============================================================================
+matrice_hellinger <- decostand(matrice_prede, method = "hellinger")
+
+# ==============================================================================
+# 3. MATRICE DI DISTANZA E BETADISPER
+# ==============================================================================
+dist_matrix <- vegdist(matrice_hellinger, method = "bray")
+
+dispersion_mod <- betadisper(dist_matrix, group = dataset_lupo$Popolazione)
+
+# ==============================================================================
+# 4. TEST DI PERMUTAZIONE
+# ==============================================================================
+set.seed(123)
+cat("\n--- Risultato Test di Permutazione per Betadisper (Hellinger) ---\n")
+test_dispersion <- permutest(dispersion_mod, permutations = 999)
+print(test_dispersion)
+
+# ==============================================================================
+# 5. DISTANZA MEDIA DAI CENTROIDI (ampiezza di nicchia multivariata)
+# ==============================================================================
+cat("\n--- Distanza media dai centroidi (più alta = dieta più variabile) ---\n")
+print(dispersion_mod$group.distances)
+
+# ==============================================================================
+# 6. GRAFICO
+# ==============================================================================
+png("Betadisper_Plot.png", width = 2000, height = 1600, res = 300)
+plot(dispersion_mod, hull = FALSE, ellipse = TRUE,
+     main = "Dispersione Multivariata della Dieta (Hellinger + Bray-Curtis)",
+     col = c("#009E73", "#CC79A7"),
+     lwd = 2, seg.col = "gray80", seg.lwd = 0.5)
+legend("topleft", legend = levels(dataset_lupo$Popolazione),
+       col = c("#009E73", "#CC79A7"), pch = 16, bty = "n", cex = 1.2)
+dev.off()
+
+cat("\nGrafico esportato come 'Betadisper_Plot.png'\n")
 
 # Fine del Master Script
 # ==============================================================================
