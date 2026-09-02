@@ -306,49 +306,70 @@ print(paste("Totale specie preda (colonne):", length(colonne_prede)))
 
 
 # =========================================================================
-# PARTE 3: STATISTICA MULTIVARIATA (NMDS, VETTORI ENVFIT, PERMANOVA, SIMPER)
 # =========================================================================
-
-# 1. CARICAMENTO DELLA COMMUNITY MATRIX APENA CREATA
+# PARTE 3 (CORRETTA): STATISTICA MULTIVARIATA — PERMANOVA e SIMPER
+# Ricalcolati su dati Hellinger-trasformati per essere coerenti con la PCoA
+# ufficiale e con il Betadisper già corretto. La versione precedente di
+# questo script (con NMDS) usava i dati RRA grezzi — qui invece PERMANOVA
+# e SIMPER lavorano sulla stessa identica matrice usata per PCoA/Betadisper.
+# =========================================================================
+ 
+library(tidyverse)
+library(vegan)
+ 
+# ==============================================================================
+# 1. CARICAMENTO DELLA COMMUNITY MATRIX
+# ==============================================================================
 df <- read_csv2("Community_Matrix_SloCro.csv", show_col_types = FALSE)
-
+ 
 # Pulizia di sicurezza: rimuoviamo eventuali colonne fantasma o artefatti di join
 df <- df %>% select(-any_of("NA"))
-
-# NOTA ECOLOGICA SULLA TASSONOMIA:
-# In questa fase manteniamo "Cervinae" (per la Slovenia) distinto da "Cervus elaphus" (per la Croazia).
-# Essendo "Cervinae" una sottofamiglia (che potenzialmente maschera reads irrisolte di capriolo),
-# adottiamo un approccio conservativo e manteniamo il dato puro del database senza forzare unioni.
-
+ 
+# NOTA TASSONOMICA (risolta): la distinzione "Cervinae" vs "Cervus elaphus" per
+# la Slovenia era dovuta a un rank non aggiornato nei file grezzi. Confermato
+# tramite BLASTn che si tratta di Cervus elaphus a livello di specie in
+# entrambe le popolazioni — nessuna azione necessaria, dato già coerente.
+ 
+# ==============================================================================
 # 2. PREPARAZIONE DEI DATI PER IL PACCHETTO VEGAN
-# Il pacchetto vegan richiede una matrice di soli numeri senza metadati di colonna
+# ==============================================================================
 metadati <- df %>% select(Sample_ID, Popolazione)
 matrice_prede <- df %>% select(-Sample_ID, -Popolazione)
-
+ 
 # Forziamo a numerico per evitare conflitti nel calcolo delle distanze
 matrice_prede <- as.data.frame(lapply(matrice_prede, as.numeric))
-
-
-
-# 6. PERMANOVA (Test Statistico Definitivo sulla dissimilarità trofica)
-# Verifico se la diversità spaziale osservata nell'NMDS è statisticamente significativa lungo il gradiente
+ 
+# ==============================================================================
+# 3. TRASFORMAZIONE DI HELLINGER
+# Stessa trasformazione già usata per la PCoA e il Betadisper — necessaria
+# per coerenza metodologica tra tutte le analisi multivariate della tesi.
+# ==============================================================================
+matrice_hellinger <- decostand(matrice_prede, method = "hellinger")
+ 
+# ==============================================================================
+# 4. PERMANOVA (su dati Hellinger-trasformati)
+# ==============================================================================
 set.seed(123)
-permanova_risultato <- adonis2(matrice_prede ~ Popolazione, data = metadati, method = "bray", permutations = 9999)
-
+permanova_risultato <- adonis2(matrice_hellinger ~ Popolazione, data = metadati,
+                                 method = "bray", permutations = 9999)
+ 
 print(" ")
 print("==================================================")
-print("              RISULTATO PERMANOVA                 ")
+print("        RISULTATO PERMANOVA (Hellinger)          ")
 print("==================================================")
 print(permanova_risultato)
-# NB: Il valore chiave si trova nella colonna Pr(>F) per il p-value e in R2 per la percentuale di varianza spiegata
-
-# 7. SIMPER (Similarity Percentages)
-# Ottengo la classifica quantitativa esatta delle prede responsabili della diversità tra Slovenia e Croazia
-simper_risultato <- simper(matrice_prede, group = metadati$Popolazione)
-
+# NB: il valore chiave è nella colonna Pr(>F) per il p-value e in R2 per la
+# percentuale di varianza spiegata
+ 
+# ==============================================================================
+# 5. SIMPER (su dati Hellinger-trasformati)
+# ==============================================================================
+set.seed(123)
+simper_risultato <- simper(matrice_hellinger, group = metadati$Popolazione, permutations = 999)
+ 
 print(" ")
 print("==================================================")
-print("                RISULTATO SIMPER                  ")
+print("          RISULTATO SIMPER (Hellinger)            ")
 print("==================================================")
 print(summary(simper_risultato))
 # ==============================================================================
