@@ -57,6 +57,27 @@ foo_pop <- grezzi %>%
   summarise(FOO_percentuale = mean(RRA_percentuale > 0) * 100, .groups = "drop")
 
 print(foo_pop, n = Inf)
+# Il conteggio assoluto delle presenze (mancava, serve per la colonna "Presenza_Assoluta")
+presenza_pop <- grezzi %>%
+  group_by(Popolazione, scientific_name) %>%
+  summarise(Presenza_Assoluta = sum(RRA_percentuale > 0), .groups = "drop")
+
+# Unisco le tre tabelle (presenza + FOO + RRA) in un'unica tabella finale
+foo_rra_finale <- presenza_pop %>%
+  left_join(foo_pop, by = c("Popolazione", "scientific_name")) %>%
+  left_join(rra_pop, by = c("Popolazione", "scientific_name")) %>%
+  filter(Presenza_Assoluta > 0) %>%
+  rename(Preda = scientific_name) %>%
+  mutate(
+    FOO_percentuale = round(FOO_percentuale, 2),
+    RRA_percentuale = round(RRA_percentuale, 2)
+  ) %>%
+  arrange(Popolazione, desc(RRA_percentuale))
+
+print(foo_rra_finale, n = Inf)
+
+# Esportazione — sovrascrive il file rotto con quello corretto
+write.csv2(foo_rra_finale, "FOO_RRA_Slovenia_and_Croatia.csv", row.names = FALSE)
 
 # calcolo indice di pianka e di levins
 rra_matrice <- rra_pop %>%
