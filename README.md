@@ -1,7 +1,7 @@
 # CALCOLO FOO, RRA e pulizia dataset
 library(tidyverse)
 
-slo <- read_delim("Sloveniawolves FILE_DEFINITIVO.csv", delim = ";", 
+slo <- read_delim("Slovenia wolves FILE DEFINITIVO.csv", delim = ";", 
                    locale = locale(encoding = "UTF-8"))
 cro <- read_delim("Croatian wolves FILE DEFINITIVO.csv", delim = ";", 
                    locale = locale(encoding = "UTF-8"))
