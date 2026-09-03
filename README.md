@@ -837,3 +837,115 @@ ggsave("HHH_Logistic_Plot_Tesi.png", plot = p, width = 10, height = 6.5, dpi = 2
 
 cat("\nGrafico salvato: HHH_Logistic_Plot_Tesi.png\n")
 
+# ==============================================================================
+# RDA (Redundancy Analysis) — versione finale
+# Inglese, colonna Geographic_Area (senza spazi), palette coerente con i
+# grafici HHH e Cinghiale/Cervidi (Croazia = #C73E1D, Slovenia = #2E86AB).
+# Autosufficiente: nessuna dipendenza da script precedenti.
+# ==============================================================================
+
+library(readr)
+library(dplyr)
+library(vegan)
+library(ggplot2)
+library(ggrepel)
+
+# ==============================================================================
+# 1. CARICAMENTO DATI E AGGREGAZIONE SPECIE DOMESTICHE
+# ==============================================================================
+community <- read_csv2("Community_Matrix_SloCro.csv", locale = locale(decimal_mark = ","))
+ndvi      <- read_csv2("Wolf_NDVI_Dynamic_Dinaric.csv", locale = locale(decimal_mark = ","))
+
+community <- community %>%
+  rename(Geographic_Area = `Geographic area`) %>%
+  mutate(Domestic = `Ovis aries` + Bos + Capra + Ovis)
+
+species_cols <- c("Cervus elaphus", "Capreolus capreolus", "Sus scrofa",
+                   "Caprinae", "Rupicapra rupicapra", "Domestic")
+
+df <- community %>%
+  inner_join(ndvi %>% select(Sample, ELEV_mean, NDVI_mean, NDVI_sd),
+             by = c("Sample_ID" = "Sample"))
+
+stopifnot(nrow(df) == 100)
+
+species_matrix <- df %>% select(all_of(species_cols)) %>% as.data.frame()
+rownames(species_matrix) <- df$Sample_ID
+
+env <- df %>% select(ELEV_mean, NDVI_mean, NDVI_sd) %>% as.data.frame()
+geographic_area <- df$Geographic_Area
+
+# ==============================================================================
+# 2. TRASFORMAZIONE DI HELLINGER E RDA
+# ==============================================================================
+species_hel <- decostand(species_matrix, method = "hellinger")
+
+modello_rda <- rda(species_hel ~ ELEV_mean + NDVI_mean + NDVI_sd, data = env)
+
+print(summary(modello_rda))
+cat("\nTest globale (permutazioni):\n")
+print(anova(modello_rda, permutations = 999))
+cat("\nTest marginale per predittore:\n")
+print(anova(modello_rda, by = "margin", permutations = 999))
+cat("\nVIF:\n")
+print(vif.cca(modello_rda))
+
+# ==============================================================================
+# 3. ESTRAZIONE SCORES
+# ==============================================================================
+site_scores <- as.data.frame(scores(modello_rda, display = "sites", scaling = 2))
+site_scores$Geographic_Area <- geographic_area
+
+species_scores <- as.data.frame(scores(modello_rda, display = "species", scaling = 2))
+species_scores$Taxon <- rownames(species_scores)
+
+env_scores <- as.data.frame(scores(modello_rda, display = "bp", scaling = 2))
+env_scores$Variable <- rownames(env_scores)
+env_scores$Variable <- recode(env_scores$Variable,
+                               "ELEV_mean" = "Elevation",
+                               "NDVI_mean" = "NDVI mean",
+                               "NDVI_sd"   = "NDVI sd")
+
+var_explained <- round(100 * eigenvals(modello_rda) / sum(eigenvals(modello_rda)), 1)
+
+# ==============================================================================
+# 4. GRAFICO
+# ==============================================================================
+palette_area <- c("Croazia" = "#C73E1D", "Slovenia" = "#2E86AB")
+arrow_mult <- 2
+
+p <- ggplot() +
+  geom_point(data = site_scores,
+             mapping = aes(x = RDA1, y = RDA2, color = Geographic_Area),
+             position = position_jitter(width = 0.03, height = 0.03),
+             size = 2.5, alpha = 0.35) +
+  geom_segment(data = species_scores,
+               mapping = aes(x = 0, y = 0, xend = RDA1, yend = RDA2),
+               arrow = arrow(length = unit(0.2, "cm")), color = "black", linewidth = 0.5) +
+  geom_text_repel(data = species_scores,
+                   mapping = aes(x = RDA1 * 1.1, y = RDA2 * 1.1, label = Taxon),
+                   color = "black", fontface = "italic", size = 3.2,
+                   seed = 42, max.overlaps = 20) +
+  geom_segment(data = env_scores,
+               mapping = aes(x = 0, y = 0, xend = RDA1 * arrow_mult, yend = RDA2 * arrow_mult),
+               arrow = arrow(length = unit(0.2, "cm")), color = "darkred", linewidth = 0.7) +
+  geom_text_repel(data = env_scores,
+                   mapping = aes(x = RDA1 * arrow_mult * 1.15, y = RDA2 * arrow_mult * 1.15, label = Variable),
+                   color = "darkred", fontface = "bold", size = 3.5,
+                   seed = 42, max.overlaps = 20) +
+  scale_color_manual(values = palette_area, name = "Geographic Area") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey70") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "grey70") +
+  labs(
+    title = "Redundancy Analysis: Dinaric Wolf Diet and Environmental Gradients",
+    subtitle = "100 fecal samples, Croatian and Slovenian geographic areas",
+    x = paste0("RDA1 (", var_explained[1], "%)"),
+    y = paste0("RDA2 (", var_explained[2], "%)")
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "top")
+
+print(p)
+ggsave("RDA_triplot_finale.png", plot = p, width = 10, height = 8, dpi = 200)
+
+cat("\nGrafico salvato: RDA_triplot_finale.png\n")
