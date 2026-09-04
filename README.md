@@ -1,4 +1,11 @@
 # CALCOLO FOO, RRA e pulizia dataset
+#
+# NOMI VERIFICATI SUI FILE FORNITI
+# - file grezzi: scientific_name, rank e colonne dei campioni
+# - tabella FOO/RRA: Popolazione, Preda, Presenza_Assoluta,
+#   FOO_percentuale, RRA_percentuale
+# - community matrix: Sample_ID, Popolazione e colonne dei taxa
+# - dati ambientali dinamici: Sample, ELEV_mean, NDVI_mean, NDVI_sd
 library(tidyverse)
 
 slo <- read_delim("Slovenia wolves FILE DEFINITIVO.csv", delim = ";", 
@@ -119,7 +126,15 @@ library(vegan)
 # =========================================================================
 
 # 1. CARICAMENTO DATI INDICI DIETETICI
-df_indici <- read_csv2("FOO&RRA Slovenia and Croatia.csv", show_col_types = FALSE)
+df_indici <- read_csv2("FOO_RRA_Slovenia_and_Croatia.csv", show_col_types = FALSE)
+
+# Controllo esplicito dello schema: interrompe l'esecuzione con un messaggio
+# chiaro se il file viene sostituito con una versione dalle colonne diverse.
+colonne_indici_richieste <- c(
+  "Popolazione", "Preda", "Presenza_Assoluta",
+  "FOO_percentuale", "RRA_percentuale"
+)
+stopifnot(all(colonne_indici_richieste %in% names(df_indici)))
 
 # Trasformiamo eventuali valori NA in 0
 df_indici[is.na(df_indici)] <- 0
@@ -156,7 +171,8 @@ crea_grafico_nazione <- function(dati, nazione) {
   # Rimuoviamo le prede che in questa nazione sono a 0 assoluto per non avere barre vuote
   df_nazione <- df_nazione %>% filter(FOO_percentuale > 0 | RRA_percentuale > 0)
   
-  # Ordiniamo le prede dalla più consumata alla meno consumata basandoci sulla RRA%
+  # Ordiniamo i taxa dal valore di RRA più alto al più basso. La RRA esprime
+  # abbondanza relativa delle sequenze rilevate, non biomassa ingerita.
   ordine_prede <- df_nazione %>%
     arrange(RRA_percentuale) %>%
     pull(Preda)
@@ -198,7 +214,10 @@ crea_grafico_nazione <- function(dati, nazione) {
     
     # Titoli ed etichette
     labs(
-      title = paste("Diet Composition -", nazione),
+      title = paste(
+        "Diet composition:",
+        recode(nazione, "Croazia" = "Croatia", "Slovenia" = "Slovenia")
+      ),
       x = "Percentage (%)",
       y = NULL,
       fill = NULL
@@ -407,8 +426,8 @@ plot_simper <- ggplot(simper_summary, aes(x = reorder(Taxon, contributo_pct),
                      name = NULL) +
   expand_limits(y = max(simper_summary$contributo_pct) * 1.15) +
   labs(
-    title = "SIMPER Analysis: Species Contributions to Dietary Divergence",
-    subtitle = "Slovenia vs Croatia | Bray-Curtis on Hellinger-transformed RRA%\n(* p<0.05, ** p<0.01, *** p<0.001)",
+    title = "SIMPER analysis: taxon contributions to between-area dissimilarity",
+    subtitle = "Slovenia vs Croatia | Bray-Curtis dissimilarity on Hellinger-transformed RRA proportions\n(* p < 0.05, ** p < 0.01, *** p < 0.001)",
     x = NULL, y = "Contribution to overall Bray-Curtis dissimilarity (%)"
   ) +
   theme_minimal(base_size = 13) +
@@ -535,7 +554,7 @@ matrice_hellinger <- decostand(matrice_prede, method = "hellinger")
 dist_matrix <- vegdist(matrice_hellinger, method = "bray")
 
 # ==============================================================================
-# 3. PCoA (Principal Coordinate Analysis)
+# 3. PCoA (Principal Coordinates Analysis)
 # ==============================================================================
 pcoa_result <- cmdscale(dist_matrix, k = 2, eig = TRUE)
 
@@ -559,6 +578,7 @@ species_scores$Taxon <- rownames(species_scores)
 # 5. GRAFICO
 # ==============================================================================
 palette_nazioni <- c("Croazia" = "#E69F00", "Slovenia" = "#56B4E9")
+etichette_nazioni <- c("Croazia" = "Croatia", "Slovenia" = "Slovenia")
 
 plot_pcoa <- ggplot(site_scores, aes(x = PCoA1, y = PCoA2)) +
   geom_point(aes(color = Popolazione, fill = Popolazione),
@@ -571,11 +591,11 @@ plot_pcoa <- ggplot(site_scores, aes(x = PCoA1, y = PCoA2)) +
   geom_text_repel(data = species_scores, aes(x = PCoA1, y = PCoA2, label = Taxon),
                    color = "black", fontface = "bold.italic", size = 4.2,
                    seed = 123, max.overlaps = 20) +
-  scale_color_manual(values = palette_nazioni) +
-  scale_fill_manual(values = palette_nazioni) +
+  scale_color_manual(values = palette_nazioni, labels = etichette_nazioni) +
+  scale_fill_manual(values = palette_nazioni, labels = etichette_nazioni) +
   labs(
-    title = "Dietary Niche Space (Principal Coordinate Analysis - PCoA)",
-    subtitle = paste0("Bray-Curtis distance on Hellinger-transformed RRA% | Variance explained: ",
+    title = "Dietary niche space (Principal Coordinates Analysis, PCoA)",
+    subtitle = paste0("Bray-Curtis dissimilarity on Hellinger-transformed RRA proportions | Variance explained: ",
                        var_asse1, "% + ", var_asse2, "%"),
     x = paste0("Coordinate 1 (", var_asse1, "%)"),
     y = paste0("Coordinate 2 (", var_asse2, "%)")
@@ -596,7 +616,7 @@ cat("\nGrafico salvato: Grafico_PCoA_Definitivo_Tesi.png\n")
 # ATTO 1 ESTESO — Selezione della preda principale, con Cinghiale integrato
 # Analisi gerarchica a due livelli + grafico finale a due pannelli.
 # Autosufficiente: nessuna dipendenza da script precedenti.
-# Usa il file Community_Matrix_SloCro.csv aggiornato (colonna "Geographic area").
+# Usa il file Community_Matrix_SloCro.csv fornito (colonna "Popolazione").
 # ==============================================================================
 
 library(readr)
@@ -610,9 +630,10 @@ library(patchwork)   # install.packages("patchwork") se non ce l'hai
 community <- read_csv2("Community_Matrix_SloCro.csv", locale = locale(decimal_mark = ","))
 ndvi      <- read_csv2("Wolf_NDVI_Dynamic_Dinaric.csv", locale = locale(decimal_mark = ","))
 
-# Rinomino subito la colonna togliendo lo spazio - elimina alla radice ogni
-# problema di backtick/virgolette nei grafici successivi
-community <- community %>% rename(Geographic_Area = `Geographic area`)
+# Nel file fornito la colonna si chiama "Popolazione". La rinominiamo qui in
+# inglese e senza spazi per usarla nei modelli e nei grafici successivi.
+stopifnot(all(c("Sample_ID", "Popolazione") %in% names(community)))
+community <- community %>% rename(Geographic_Area = Popolazione)
 
 df <- community %>%
   inner_join(ndvi %>% select(Sample, ELEV_mean, NDVI_mean, NDVI_sd),
@@ -698,6 +719,7 @@ print(summary(modello_check_ndvi_sd))
 # 6. GRAFICO — due pannelli affiancati
 # ==============================================================================
 palette_area <- c("Croazia" = "#C73E1D", "Slovenia" = "#2E86AB")
+etichette_area <- c("Croazia" = "Croatia", "Slovenia" = "Slovenia")
 # Stessa palette del grafico HHH. Se la RDA usa ancora "#E69F00"/"#56B4E9",
 # allineala anche lei a questi due colori per coerenza tra le tre figure.
 
@@ -725,7 +747,8 @@ panelA <- ggplot() +
   geom_jitter(data = df_sub,
               aes(x = ELEV_mean, y = is_boar_dominant, color = Geographic_Area),
               width = 0, height = 0.03, size = 2.2, alpha = 0.7) +
-  scale_color_manual(values = palette_area, name = "Geographic Area") +
+  scale_color_manual(values = palette_area, labels = etichette_area,
+                     name = "Geographic area") +
   scale_y_continuous(breaks = c(0, 1),
                       labels = c("Cervid-dominated", "Boar-dominated")) +
   labs(title = "A) Wild boar vs. cervids",
@@ -742,7 +765,8 @@ panelB <- ggplot() +
   geom_jitter(data = df_cervidi,
               aes(x = ELEV_mean, y = is_cervo_dominant, color = Geographic_Area),
               width = 0, height = 0.03, size = 2.2, alpha = 0.7) +
-  scale_color_manual(values = palette_area, name = "Geographic Area") +
+  scale_color_manual(values = palette_area, labels = etichette_area,
+                     name = "Geographic area") +
   scale_y_continuous(breaks = c(0, 1),
                       labels = c("Roe deer-dominated", "Red deer-dominated")) +
   labs(title = "B) Red deer vs. roe deer (within cervids)",
@@ -779,8 +803,9 @@ library(ggplot2)
 community <- read_csv2("Community_Matrix_SloCro.csv", locale = locale(decimal_mark = ","))
 ndvi      <- read_csv2("Wolf_NDVI_Dynamic_Dinaric.csv", locale = locale(decimal_mark = ","))
 
-# Rinomino subito la colonna, stessa logica usata per gli altri script
-community <- community %>% rename(Geographic_Area = `Geographic area`)
+# Nel file fornito la colonna si chiama "Popolazione".
+stopifnot(all(c("Sample_ID", "Popolazione") %in% names(community)))
+community <- community %>% rename(Geographic_Area = Popolazione)
 
 species_cols <- c("Capreolus capreolus", "Caprinae", "Cervus elaphus", "Ovis aries",
                    "Rupicapra rupicapra", "Sus scrofa", "Bos", "Capra", "Lepus", "Ovis")
@@ -816,6 +841,7 @@ print(exp(cbind(OR = coef(modello_hhh), confint(modello_hhh))))
 # 4. GRAFICO
 # ==============================================================================
 palette_area <- c("Croazia" = "#C73E1D", "Slovenia" = "#2E86AB")
+etichette_area <- c("Croazia" = "Croatia", "Slovenia" = "Slovenia")
 # Stessa palette usata nei grafici RDA e Cinghiale/Cervidi - coerenza tra
 # tutte e tre le figure ambientali della tesi.
 
@@ -823,7 +849,8 @@ p <- ggplot(df, aes(x = NDVI_sd, y = Dieta_mista)) +
   geom_jitter(aes(color = Geographic_Area), width = 0, height = 0.03, size = 2.5, alpha = 0.7) +
   geom_smooth(method = "glm", method.args = list(family = "binomial"),
               se = TRUE, color = "black", fill = "grey70") +
-  scale_color_manual(values = palette_area, name = "Geographic Area") +
+  scale_color_manual(values = palette_area, labels = etichette_area,
+                     name = "Geographic area") +
   scale_y_continuous(breaks = c(0, 1), labels = c("Pure\n(1 taxon)", "Mixed\n(>1 taxon)")) +
   labs(title = "Habitat Heterogeneity Hypothesis (HHH)",
        subtitle = "Probability of mixed diet as a function of environmental heterogeneity",
@@ -856,8 +883,9 @@ library(ggrepel)
 community <- read_csv2("Community_Matrix_SloCro.csv", locale = locale(decimal_mark = ","))
 ndvi      <- read_csv2("Wolf_NDVI_Dynamic_Dinaric.csv", locale = locale(decimal_mark = ","))
 
+stopifnot(all(c("Sample_ID", "Popolazione") %in% names(community)))
 community <- community %>%
-  rename(Geographic_Area = `Geographic area`) %>%
+  rename(Geographic_Area = Popolazione) %>%
   mutate(Domestic = `Ovis aries` + Bos + Capra + Ovis)
 
 species_cols <- c("Cervus elaphus", "Capreolus capreolus", "Sus scrofa",
@@ -912,6 +940,7 @@ var_explained <- round(100 * eigenvals(modello_rda) / sum(eigenvals(modello_rda)
 # 4. GRAFICO
 # ==============================================================================
 palette_area <- c("Croazia" = "#C73E1D", "Slovenia" = "#2E86AB")
+etichette_area <- c("Croazia" = "Croatia", "Slovenia" = "Slovenia")
 arrow_mult <- 2
 
 p <- ggplot() +
@@ -933,7 +962,8 @@ p <- ggplot() +
                    mapping = aes(x = RDA1 * arrow_mult * 1.15, y = RDA2 * arrow_mult * 1.15, label = Variable),
                    color = "darkred", fontface = "bold", size = 3.5,
                    seed = 42, max.overlaps = 20) +
-  scale_color_manual(values = palette_area, name = "Geographic Area") +
+  scale_color_manual(values = palette_area, labels = etichette_area,
+                     name = "Geographic area") +
   geom_hline(yintercept = 0, linetype = "dashed", color = "grey70") +
   geom_vline(xintercept = 0, linetype = "dashed", color = "grey70") +
   labs(
