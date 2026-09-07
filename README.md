@@ -140,93 +140,65 @@ stopifnot(all(colonne_indici_richieste %in% names(df_indici)))
 df_indici[is.na(df_indici)] <- 0
 
 # 2. CATEGORIZZAZIONE E COLORI (TUTTI I TAXA INCLUSI)
-# Creiamo una colonna "Categoria" includendo anche le famiglie e sottofamiglie
+# Caprinae resta una categoria a se' stante: non e' mai assegnato ne' al
+# bestiame domestico ne' agli ungulati selvatici (vedi Metodi, Sezione 2.1).
 df_indici <- df_indici %>%
   mutate(Categoria = case_when(
-    Preda %in% c("Capreolus capreolus", "Cervus elaphus", "Cervinae", "Sus scrofa", "Rupicapra rupicapra") ~ "wild ungulates",
-    Preda %in% c("Ovis aries", "Caprinae", "Ovis", "Capra") ~ "sheep & goats",
-    Preda %in% c("Bos") ~ "cattle",
-    TRUE ~ "small fauna & other" # Comprende Lepus e altra microfauna
+    Preda %in% c("Capreolus capreolus", "Cervus elaphus", "Sus scrofa", "Rupicapra rupicapra") ~ "wild ungulates",
+    Preda %in% c("Ovis aries", "Ovis", "Capra", "Bos") ~ "domestic livestock",
+    Preda == "Caprinae" ~ "unresolved Caprinae",
+    TRUE ~ "other taxa"  # Lepus e altra microfauna
   ))
 
-# Definiamo la palette di colori ESATTA ispirata allo screenshot del paper Jura
+# Palette validata, coerente con il grafico Slovenia gia' approvato
 colori_jura <- c(
-  "wild ungulates" = "#007A4D",       # Verde scuro
-  "sheep & goats" = "#E2D19A",        # Beige
-  "cattle" = "#B3987E",               # Marroncino chiaro
-  "small fauna & other" = "#95C78F"   # Verde chiaro
+  "wild ungulates" = "#004C6D",
+  "domestic livestock" = "#D95F59",
+  "unresolved Caprinae" = "#B84D9B",
+  "other taxa" = "#E69F00"
 )
 
-# Fissiamo l'ordine della legenda come nel paper
+# Fissiamo l'ordine della legenda
 df_indici$Categoria <- factor(df_indici$Categoria,
-                              levels = c("wild ungulates", "sheep & goats", "small fauna & other", "cattle"))
+  levels = c("wild ungulates", "domestic livestock", "unresolved Caprinae", "other taxa"))
+
+# Generi e specie in corsivo; Caprinae (rango di sottofamiglia) in tondo
+etichette_taxa_plotmath <- function(x) {
+  parse(text = ifelse(x == "Caprinae", "plain('Caprinae')", sprintf("italic('%s')", x)))
+}
 
 # 3. FUNZIONE GENERATRICE DEL GRAFICO A 2 PANNELLI
-# Creiamo una funzione che prende i dati e il nome della nazione e genera il plot
 crea_grafico_nazione <- function(dati, nazione) {
-  
-  # Filtriamo solo i dati della nazione richiesta
-  df_nazione <- dati %>% filter(Popolazione == nazione)
-  
-  # Rimuoviamo le prede che in questa nazione sono a 0 assoluto per non avere barre vuote
-  df_nazione <- df_nazione %>% filter(FOO_percentuale > 0 | RRA_percentuale > 0)
-  
-  # Ordiniamo i taxa dal valore di RRA più alto al più basso. La RRA esprime
-  # abbondanza relativa delle sequenze rilevate, non biomassa ingerita.
-  ordine_prede <- df_nazione %>%
-    arrange(RRA_percentuale) %>%
-    pull(Preda)
-  
+
+  df_nazione <- dati %>% filter(Popolazione == nazione) %>%
+    filter(FOO_percentuale > 0 | RRA_percentuale > 0)
+
+  ordine_prede <- df_nazione %>% arrange(RRA_percentuale) %>% pull(Preda)
   df_nazione$Preda <- factor(df_nazione$Preda, levels = ordine_prede)
-  
-  # Allunghiamo il dataset per creare i due pannelli (solo FOO% e RRA% come da indicazioni di Marta)
+
   df_long <- df_nazione %>%
-    pivot_longer(
-      cols = c(FOO_percentuale, RRA_percentuale),
-      names_to = "Metrica",
-      values_to = "Valore"
-    ) %>%
+    pivot_longer(cols = c(FOO_percentuale, RRA_percentuale),
+                 names_to = "Metrica", values_to = "Valore") %>%
     mutate(Metrica = recode(Metrica,
                             "FOO_percentuale" = "Frequency of Occurrence",
                             "RRA_percentuale" = "Relative Read Abundance"))
-  
-  # Fissiamo l'ordine dei pannelli da sinistra a destra
-  df_long$Metrica <- factor(df_long$Metrica, levels = c("Frequency of Occurrence", "Relative Read Abundance"))
-  
-  # Calcoliamo il limite massimo dell'asse X per dare spazio ai numeri alla fine della barra
+  df_long$Metrica <- factor(df_long$Metrica,
+    levels = c("Frequency of Occurrence", "Relative Read Abundance"))
+
   max_x <- max(df_long$Valore) * 1.15
-  
-  # Creazione del Plot
-  p <- ggplot(df_long, aes(x = Valore, y = Preda, fill = Categoria)) +
+
+  ggplot(df_long, aes(x = Valore, y = Preda, fill = Categoria)) +
     geom_bar(stat = "identity", width = 0.8) +
-    
-    # Etichetta numerica alla fine della barra con 1 decimale
     geom_text(aes(label = round(Valore, 1)), hjust = -0.2, size = 3.5, color = "black") +
-    
-    # Creiamo i due pannelli separati
     facet_wrap(~ Metrica, scales = "free_x") +
-    
-    # Applichiamo i colori scelti
     scale_fill_manual(values = colori_jura) +
-    
-    # Espandiamo l'asse X in base al massimo calcolato
+    scale_y_discrete(labels = etichette_taxa_plotmath) +
     scale_x_continuous(limits = c(0, max_x), expand = c(0, 0)) +
-    
-    # Titoli ed etichette
-    labs(
-      title = paste(
-        "Diet composition:",
-        recode(nazione, "Croazia" = "Croatia", "Slovenia" = "Slovenia")
-      ),
-      x = "Percentage (%)",
-      y = NULL,
-      fill = NULL
-    ) +
-    
-    # Stile e formattazione (in linea con lo stile del paper)
+    labs(title = paste("Diet composition:", recode(nazione, "Croazia" = "Croatia", "Slovenia" = "Slovenia")),
+         x = "Percentage (%)", y = NULL, fill = NULL) +
     theme_bw() +
     theme(
-      axis.text.y = element_text(face = "italic", size = 12, color = "black"),
+      axis.text.y = element_text(face = "plain", size = 12, color = "black"),
       axis.text.x = element_text(size = 11, color = "black"),
       plot.title = element_text(face = "bold", size = 14, hjust = 0.5, margin = margin(b = 15)),
       strip.text = element_text(face = "bold", size = 12),
@@ -237,21 +209,17 @@ crea_grafico_nazione <- function(dati, nazione) {
       legend.text = element_text(size = 12),
       legend.key.size = unit(0.5, "cm")
     )
-  
-  return(p)
 }
 
-# 4. GENERAZIONE E VISUALIZZAZIONE GRAFICI PARTE 1
+# 4. GENERAZIONE E SALVATAGGIO
 plot_slo <- crea_grafico_nazione(df_indici, "Slovenia")
 plot_cro <- crea_grafico_nazione(df_indici, "Croazia")
 
-# Mostra i grafici direttamente su RStudio nel pannello Plots
 print(plot_slo)
 print(plot_cro)
 
-# Salvataggio opzionale dei file PNG (rimuovere il cancelletto iniziale per salvare)
-# ggsave("Grafico_Dieta_Slovenia_Jura.png", plot = plot_slo, width = 10, height = 5, dpi = 300)
-# ggsave("Grafico_Dieta_Croazia_Jura.png", plot = plot_cro, width = 10, height = 5, dpi = 300)
+ggsave("Grafico_2Pannelli_Slovenia_final.png", plot = plot_slo, width = 12, height = 6, dpi = 300)
+ggsave("Grafico_2Pannelli_Croazia_final.png", plot = plot_cro, width = 12, height = 6, dpi = 300)
 
 
 # =========================================================================
