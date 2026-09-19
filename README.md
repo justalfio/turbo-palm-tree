@@ -1,177 +1,232 @@
-# CALCOLO FOO, RRA e pulizia dataset
+# ==============================================================================
+# DIET COMPOSITION AND ENVIRONMENTAL CORRELATES OF THE GREY WOLF
+# IN SLOVENIA AND CROATIA - SCRIPT UNICO DI ANALISI
 #
-# NOMI VERIFICATI SUI FILE FORNITI
-# - file grezzi: scientific_name, rank e colonne dei campioni
-# - tabella FOO/RRA: Popolazione, Preda, Presenza_Assoluta,
-#   FOO_percentuale, RRA_percentuale
-# - community matrix: Sample_ID, Popolazione e colonne dei taxa
-# - dati ambientali dinamici: Sample, ELEV_mean, NDVI_mean, NDVI_sd
+# Alfio Tomarchio - Universita' di Bologna
+# Ultima revisione: 19 settembre 2026
+#
+# COSA E' CAMBIATO RISPETTO ALLA VERSIONE PRECEDENTE (elenco completo)
+#
+#  1. library(MASS) caricato PRIMA di tidyverse. Serve per gli intervalli di
+#     confidenza da profilo di verosimiglianza di confint() sui GLM; se MASS
+#     non e' caricato, confint() restituisce intervalli di Wald, che sono
+#     diversi da quelli riportati in tesi. Caricato prima perche' MASS::select
+#     mascherebbe dplyr::select.
+#  2. PCoA ricalcolata sui 10 TAXA, non sulle 6 categorie aggregate. La
+#     versione a 6 categorie da' 52.70% + 27.06%; la figura della tesi riporta
+#     52.70% + 26.72%, che e' la versione a 10 taxa. Ora lo script riproduce
+#     esattamente la figura della tesi.
+#  3. Grafico PCoA ridisegnato: i campioni con lo stesso profilo di preda
+#     cadono nello stesso punto, quindi il jitter casuale nascondeva la
+#     struttura del dato. Ora la dimensione del punto e' il numero di campioni
+#     che occupano quella posizione (fino a 35 su un solo punto). ATTENZIONE
+#     alla distinzione: i 100 campioni danno 25 PROFILI dietetici distinti ma
+#     solo 24 POSIZIONI distinte nel piano, perche' il campione con solo Ovis e
+#     quello con solo Capra hanno coordinate identiche sui primi cinque assi e
+#     si separano solo sul sesto (1.51% degli autovalori).
+#  4. Nuova Figura 3.1: output del metabarcoding (taxa per campione e reads
+#     per campione). Risponde al commento "manca tutto il capitolo di
+#     descrizione dei dati del metabarcoding".
+#  5. Nuova Figura 3.3: FOO e RRA delle due aree sugli stessi assi. Risponde al
+#     commento "utilizza qualche barplot per una migliore comprensione".
+#  6. Nuova Figura 3.6: distribuzione dei campioni per tipo di dieta. E' la
+#     figura che rende leggibile cio' che nella PCoA resta nascosto.
+#  7. Grafico HHH corretto: la curva disegnata da geom_smooth() proveniva da un
+#     modello univariato su NDVI_sd, NON dal modello riportato in tesi. Ora le
+#     curve sono predette dal modello multivariato, separate per area e a
+#     quota media, esattamente come dice la didascalia.
+#  8. Aggiunto il test del rapporto di verosimiglianza sull'interazione
+#     NDVI_sd x area (chi2 = 0.184, p = 0.668), riportato in tesi ma assente
+#     dallo script.
+#  9. Betadisper: titolo ed etichette in inglese.
+# 10. Palette unica per tutte le figure. Il blu #2E86AB non supera il controllo
+#     di croma (0.099: a stampa e in scala di grigi vira al grigio); sostituito
+#     con #1F7FB5, visivamente quasi identico e con separazione adeguata anche
+#     per daltonismo (Delta E 22.0 protanopia).
+# 11. Percorsi dei file raccolti in un unico blocco in testa.
+# 12. Controlli espliciti (stopifnot) sui numeri attesi, cosi' se un file viene
+#     sostituito lo script si ferma invece di produrre numeri diversi in
+#     silenzio.
+# 13. sessionInfo() in coda, per la sezione Software and Reproducibility.
+#
+# NOTA SULLA SOGLIA DELL'1%: i due file FILE DEFINITIVO hanno gia' la soglia
+# applicata a monte. Lo script lo verifica invece di darlo per scontato.
+# ==============================================================================
+
+
+# ==============================================================================
+# 0. SETUP
+# ==============================================================================
+
+# MASS PRIMA di tidyverse: confint() sui GLM usa il metodo di MASS (profilo di
+# verosimiglianza). Invertendo l'ordine, MASS::select mascherebbe dplyr::select.
+library(MASS)
 library(tidyverse)
+library(vegan)
+library(ggrepel)
+library(patchwork)
 
-slo <- read_delim("Slovenia wolves FILE DEFINITIVO.csv", delim = ";", 
-                   locale = locale(encoding = "UTF-8"))
-cro <- read_delim("Croatian wolves FILE DEFINITIVO.csv", delim = ";", 
-                   locale = locale(encoding = "UTF-8"))
+set.seed(123)
 
-# Converto da formato largo (specie x campione) a formato lungo
+# --- percorsi dei file (unico punto da modificare se rinomini qualcosa) -------
+FILE_SLO       <- "Slovenia wolves FILE DEFINITIVO.csv"
+FILE_CRO       <- "Croatian wolves FILE DEFINITIVO.csv"
+FILE_AMBIENTE  <- "Wolf_NDVI_Dynamic_Dinaric.csv"
+OUT_FOO_RRA    <- "FOO_RRA_Slovenia_and_Croatia.csv"
+OUT_COMMUNITY  <- "Community_Matrix_SloCro.csv"
+
+# --- palette unica per tutte le figure della tesi -----------------------------
+# Slovenia #1F7FB5, Croazia #C73E1D. Controllate: banda di luminosita',
+# soglia di croma, separazione per protanopia/deuteranopia/tritanopia,
+# separazione a visione normale, contrasto sul fondo chiaro.
+COL_AREA <- c("Slovenia" = "#1F7FB5", "Croazia" = "#C73E1D")
+LAB_AREA <- c("Slovenia" = "Slovenia", "Croazia" = "Croatia")
+
+# Palette per categoria trofica (grafici a due pannelli per area)
+COL_CATEGORIA <- c(
+  "wild ungulates"      = "#004C6D",
+  "domestic livestock"  = "#D95F59",
+  "unresolved Caprinae" = "#B84D9B",
+  "other taxa"          = "#E69F00"
+)
+
+# Generi e specie in corsivo; Caprinae (sottofamiglia) in tondo
+etichette_taxa_plotmath <- function(x) {
+  parse(text = ifelse(x == "Caprinae",
+                      "plain('Caprinae')",
+                      sprintf("italic('%s')", x)))
+}
+
+tema_tesi <- theme_minimal(base_size = 12) +
+  theme(
+    plot.title    = element_text(face = "bold"),
+    plot.subtitle = element_text(colour = "grey35"),
+    panel.grid.minor = element_blank(),
+    legend.title  = element_blank()
+  )
+
+
+# ==============================================================================
+# 1. CARICAMENTO, FORMATO LUNGO E VERIFICA DELLA SOGLIA DELL'1%
+# ==============================================================================
+
+slo <- read_delim(FILE_SLO, delim = ";", locale = locale(encoding = "UTF-8"),
+                  show_col_types = FALSE)
+cro <- read_delim(FILE_CRO, delim = ";", locale = locale(encoding = "UTF-8"),
+                  show_col_types = FALSE)
+
 slo_long <- slo %>%
-  select(-rank) %>%
+  dplyr::select(-rank) %>%
   pivot_longer(-scientific_name, names_to = "Sample_ID", values_to = "reads") %>%
   mutate(Popolazione = "Slovenia")
 
 cro_long <- cro %>%
-  select(-rank) %>%
+  dplyr::select(-rank) %>%
   pivot_longer(-scientific_name, names_to = "Sample_ID", values_to = "reads") %>%
   mutate(Popolazione = "Croazia")
 
 grezzi <- bind_rows(slo_long, cro_long)
 
-nrow(grezzi)
-n_distinct(grezzi$Sample_ID)
+# Controlli: 100 campioni, 49 + 51
+stopifnot(n_distinct(grezzi$Sample_ID) == 100)
+stopifnot(n_distinct(grezzi$Sample_ID[grezzi$Popolazione == "Slovenia"]) == 49)
+stopifnot(n_distinct(grezzi$Sample_ID[grezzi$Popolazione == "Croazia"])  == 51)
+
 grezzi <- grezzi %>%
   group_by(Sample_ID) %>%
   mutate(totale_grezzo = sum(reads)) %>%
   ungroup() %>%
   mutate(pct_grezza = if_else(totale_grezzo > 0, reads / totale_grezzo * 100, 0))
 
-# Quante osservazioni specie-campione vengono azzerate dalla soglia dell'1%?
-# (reads>0 ma sotto la soglia ecologica)
+# Verifica della soglia dell'1%: nei FILE DEFINITIVO la soglia e' gia' stata
+# applicata a monte, quindi qui non deve restare nessuna detection sotto l'1%.
 sotto_soglia <- grezzi %>% filter(reads > 0 & pct_grezza < 1)
-nrow(sotto_soglia)
-print(sotto_soglia)
+cat("\nDetection residue sotto la soglia dell'1%:", nrow(sotto_soglia), "\n")
+cat("Detection piu' piccola trattenuta, per area (%):\n")
+print(grezzi %>% filter(reads > 0) %>%
+        group_by(Popolazione) %>%
+        summarise(minima_pct = round(min(pct_grezza), 2), .groups = "drop"))
+# Atteso: 0 detection sotto soglia; minima 1.60% in Slovenia, 5.63% in Croazia.
+stopifnot(nrow(sotto_soglia) == 0)
 
-# Applico la soglia: azzero le read sotto l'1%, poi ricalcolo il totale
-# "pulito" e la percentuale finale su quel nuovo totale
+# La soglia resta scritta nel codice (idempotente) per rendere esplicito il
+# passaggio metodologico anche a chi rilegge solo lo script.
 grezzi <- grezzi %>%
   mutate(reads_filtrate = if_else(pct_grezza < 1, 0, reads)) %>%
   group_by(Sample_ID) %>%
   mutate(totale_filtrato = sum(reads_filtrate)) %>%
   ungroup() %>%
-  mutate(RRA_percentuale = if_else(totale_filtrato > 0, reads_filtrate / totale_filtrato * 100, 0))
+  mutate(RRA_percentuale = if_else(totale_filtrato > 0,
+                                   reads_filtrate / totale_filtrato * 100, 0))
 
-# Verifica: per ogni campione con almeno una read valida, l'RRA deve sommare a 100
+# Ogni campione deve sommare a 100
 controllo_somme <- grezzi %>%
   group_by(Sample_ID) %>%
-  summarise(somma_RRA = sum(RRA_percentuale))
-summary(controllo_somme$somma_RRA)
+  summarise(somma_RRA = sum(RRA_percentuale), .groups = "drop")
+stopifnot(all(abs(controllo_somme$somma_RRA - 100) < 1e-6))
+
+
+# ==============================================================================
+# 2. DESCRITTORI DIETETICI: FOO, RRA, PRESENZE ASSOLUTE
+# ==============================================================================
+
 rra_pop <- grezzi %>%
   group_by(Popolazione, scientific_name) %>%
   summarise(RRA_percentuale = mean(RRA_percentuale), .groups = "drop")
 
-print(rra_pop, n = Inf)
 foo_pop <- grezzi %>%
   group_by(Popolazione, scientific_name) %>%
   summarise(FOO_percentuale = mean(RRA_percentuale > 0) * 100, .groups = "drop")
 
-print(foo_pop, n = Inf)
-# Il conteggio assoluto delle presenze (mancava, serve per la colonna "Presenza_Assoluta")
 presenza_pop <- grezzi %>%
   group_by(Popolazione, scientific_name) %>%
   summarise(Presenza_Assoluta = sum(RRA_percentuale > 0), .groups = "drop")
 
-# Unisco le tre tabelle (presenza + FOO + RRA) in un'unica tabella finale
 foo_rra_finale <- presenza_pop %>%
   left_join(foo_pop, by = c("Popolazione", "scientific_name")) %>%
   left_join(rra_pop, by = c("Popolazione", "scientific_name")) %>%
   filter(Presenza_Assoluta > 0) %>%
   rename(Preda = scientific_name) %>%
-  mutate(
-    FOO_percentuale = round(FOO_percentuale, 2),
-    RRA_percentuale = round(RRA_percentuale, 2)
-  ) %>%
+  mutate(FOO_percentuale = round(FOO_percentuale, 2),
+         RRA_percentuale = round(RRA_percentuale, 2)) %>%
   arrange(Popolazione, desc(RRA_percentuale))
 
 print(foo_rra_finale, n = Inf)
+write.csv2(foo_rra_finale, OUT_FOO_RRA, row.names = FALSE)
 
-# Esportazione — sovrascrive il file rotto con quello corretto
-write.csv2(foo_rra_finale, "FOO_RRA_Slovenia_and_Croatia.csv", row.names = FALSE)
-
-# calcolo indice di pianka e di levins
-rra_matrice <- rra_pop %>%
-  pivot_wider(names_from = scientific_name, values_from = RRA_percentuale, values_fill = 0)
-
-levins_finale <- rra_matrice %>%
-  rowwise() %>%
-  mutate(
-    B = 1 / sum(c_across(-Popolazione)^2 / 10000),
-    B_A = (B - 1) / (10 - 1)
-  ) %>%
-  select(Popolazione, B_A)
-print(levins_finale)
-
-p_slo <- as.numeric(rra_matrice[rra_matrice$Popolazione=="Slovenia", -1]) / 100
-p_cro <- as.numeric(rra_matrice[rra_matrice$Popolazione=="Croazia", -1]) / 100
-pianka_finale <- sum(p_slo * p_cro) / sqrt(sum(p_slo^2) * sum(p_cro^2))
-print(pianka_finale)
+# Valori attesi in tesi (Tabella 3.2):
+#   Slovenia: Capreolus 55.10 / 45.41 - Cervus 48.98 / 38.42 - Caprinae 10.20 / 9.41
+#   Croazia : Cervus 41.18 / 40.39 - Capreolus 31.37 / 30.20 - Sus 19.61 / 18.84
 
 
+# ==============================================================================
+# 3. FIGURE 3.1 e 3.2 - COMPOSIZIONE DELLA DIETA PER AREA (due pannelli)
+# ==============================================================================
 
-
-# =========================================================================
-# PIPELINE INTEGRATA DIETA LUPO: SLOVENIA VS CROAZIA
-# PARTE 1: Grafici di composizione della dieta (FOO% e RRA% - Stile Jura)
-# PARTE 2: Creazione Community Matrix (RRA% per singolo campione)
-# PARTE 3: Statistica Multivariata (NMDS con vettori envfit, PERMANOVA, SIMPER)
-# =========================================================================
-
-# Caricamento delle librerie fondamentali per l'intera pipeline
-library(dplyr)
-library(readr)
-library(ggplot2)
-library(tidyr)
-library(vegan)
-
-# =========================================================================
-# PARTE 1: CREAZIONE GRAFICI PUBBLICABILI (FOO% E RRA%)
-# =========================================================================
-
-# 1. CARICAMENTO DATI INDICI DIETETICI
-df_indici <- read_csv2("FOO_RRA_Slovenia_and_Croatia.csv", show_col_types = FALSE)
-
-# Controllo esplicito dello schema: interrompe l'esecuzione con un messaggio
-# chiaro se il file viene sostituito con una versione dalle colonne diverse.
-colonne_indici_richieste <- c(
-  "Popolazione", "Preda", "Presenza_Assoluta",
-  "FOO_percentuale", "RRA_percentuale"
-)
-stopifnot(all(colonne_indici_richieste %in% names(df_indici)))
-
-# Trasformiamo eventuali valori NA in 0
+df_indici <- read_csv2(OUT_FOO_RRA, show_col_types = FALSE)
+stopifnot(all(c("Popolazione", "Preda", "Presenza_Assoluta",
+                "FOO_percentuale", "RRA_percentuale") %in% names(df_indici)))
 df_indici[is.na(df_indici)] <- 0
 
-# 2. CATEGORIZZAZIONE E COLORI (TUTTI I TAXA INCLUSI)
-# Caprinae resta una categoria a se' stante: non e' mai assegnato ne' al
-# bestiame domestico ne' agli ungulati selvatici (vedi Metodi, Sezione 2.1).
+# Caprinae resta una categoria a se': non e' mai assegnato ne' al bestiame
+# domestico ne' agli ungulati selvatici (Metodi, Sezione 2.5).
 df_indici <- df_indici %>%
   mutate(Categoria = case_when(
-    Preda %in% c("Capreolus capreolus", "Cervus elaphus", "Sus scrofa", "Rupicapra rupicapra") ~ "wild ungulates",
-    Preda %in% c("Ovis aries", "Ovis", "Capra", "Bos") ~ "domestic livestock",
-    Preda == "Caprinae" ~ "unresolved Caprinae",
-    TRUE ~ "other taxa"  # Lepus e altra microfauna
+    Preda %in% c("Capreolus capreolus", "Cervus elaphus",
+                 "Sus scrofa", "Rupicapra rupicapra") ~ "wild ungulates",
+    Preda %in% c("Ovis aries", "Ovis", "Capra", "Bos")  ~ "domestic livestock",
+    Preda == "Caprinae"                                 ~ "unresolved Caprinae",
+    TRUE                                                ~ "other taxa"
   ))
-
-# Palette validata, coerente con il grafico Slovenia gia' approvato
-colori_jura <- c(
-  "wild ungulates" = "#004C6D",
-  "domestic livestock" = "#D95F59",
-  "unresolved Caprinae" = "#B84D9B",
-  "other taxa" = "#E69F00"
-)
-
-# Fissiamo l'ordine della legenda
 df_indici$Categoria <- factor(df_indici$Categoria,
-  levels = c("wild ungulates", "domestic livestock", "unresolved Caprinae", "other taxa"))
+  levels = c("wild ungulates", "domestic livestock",
+             "unresolved Caprinae", "other taxa"))
 
-# Generi e specie in corsivo; Caprinae (rango di sottofamiglia) in tondo
-etichette_taxa_plotmath <- function(x) {
-  parse(text = ifelse(x == "Caprinae", "plain('Caprinae')", sprintf("italic('%s')", x)))
-}
-
-# 3. FUNZIONE GENERATRICE DEL GRAFICO A 2 PANNELLI
 crea_grafico_nazione <- function(dati, nazione) {
 
-  df_nazione <- dati %>% filter(Popolazione == nazione) %>%
-    filter(FOO_percentuale > 0 | RRA_percentuale > 0)
+  df_nazione <- dati %>%
+    filter(Popolazione == nazione,
+           FOO_percentuale > 0 | RRA_percentuale > 0)
 
   ordine_prede <- df_nazione %>% arrange(RRA_percentuale) %>% pull(Preda)
   df_nazione$Preda <- factor(df_nazione$Preda, levels = ordine_prede)
@@ -180,770 +235,665 @@ crea_grafico_nazione <- function(dati, nazione) {
     pivot_longer(cols = c(FOO_percentuale, RRA_percentuale),
                  names_to = "Metrica", values_to = "Valore") %>%
     mutate(Metrica = recode(Metrica,
-                            "FOO_percentuale" = "Frequency of Occurrence",
-                            "RRA_percentuale" = "Relative Read Abundance"))
+             "FOO_percentuale" = "Frequency of Occurrence",
+             "RRA_percentuale" = "Relative Read Abundance"))
   df_long$Metrica <- factor(df_long$Metrica,
     levels = c("Frequency of Occurrence", "Relative Read Abundance"))
 
-  max_x <- max(df_long$Valore) * 1.15
-
   ggplot(df_long, aes(x = Valore, y = Preda, fill = Categoria)) +
-    geom_bar(stat = "identity", width = 0.8) +
-    geom_text(aes(label = round(Valore, 1)), hjust = -0.2, size = 3.5, color = "black") +
+    geom_col(width = 0.8) +
+    geom_text(aes(label = round(Valore, 1)), hjust = -0.2, size = 3.5) +
     facet_wrap(~ Metrica, scales = "free_x") +
-    scale_fill_manual(values = colori_jura) +
+    scale_fill_manual(values = COL_CATEGORIA) +
     scale_y_discrete(labels = etichette_taxa_plotmath) +
-    scale_x_continuous(limits = c(0, max_x), expand = c(0, 0)) +
-    labs(title = paste("Diet composition:", recode(nazione, "Croazia" = "Croatia", "Slovenia" = "Slovenia")),
+    scale_x_continuous(limits = c(0, max(df_long$Valore) * 1.15),
+                       expand = c(0, 0)) +
+    labs(title = paste("Diet composition:", LAB_AREA[[nazione]]),
          x = "Percentage (%)", y = NULL, fill = NULL) +
     theme_bw() +
     theme(
-      axis.text.y = element_text(face = "plain", size = 12, color = "black"),
-      axis.text.x = element_text(size = 11, color = "black"),
-      plot.title = element_text(face = "bold", size = 14, hjust = 0.5, margin = margin(b = 15)),
+      axis.text.y = element_text(size = 12, colour = "black"),
+      axis.text.x = element_text(size = 11, colour = "black"),
+      plot.title = element_text(face = "bold", size = 14, hjust = 0.5,
+                                margin = margin(b = 15)),
       strip.text = element_text(face = "bold", size = 12),
-      strip.background = element_rect(fill = "white", color = "black", linewidth = 1),
+      strip.background = element_rect(fill = "white", colour = "black",
+                                      linewidth = 1),
       panel.grid.major.y = element_blank(),
       panel.grid.minor = element_blank(),
-      legend.position = "bottom",
-      legend.text = element_text(size = 12),
-      legend.key.size = unit(0.5, "cm")
+      legend.position = "bottom"
     )
 }
 
-# 4. GENERAZIONE E SALVATAGGIO
 plot_slo <- crea_grafico_nazione(df_indici, "Slovenia")
 plot_cro <- crea_grafico_nazione(df_indici, "Croazia")
-
-print(plot_slo)
-print(plot_cro)
-
-ggsave("Grafico_2Pannelli_Slovenia_final.png", plot = plot_slo, width = 12, height = 6, dpi = 300)
-ggsave("Grafico_2Pannelli_Croazia_final.png", plot = plot_cro, width = 12, height = 6, dpi = 300)
+ggsave("Grafico_2Pannelli_Slovenia_final.png", plot_slo,
+       width = 12, height = 6, dpi = 300)
+ggsave("Grafico_2Pannelli_Croazia_final.png", plot_cro,
+       width = 12, height = 6, dpi = 300)
 
 
-# =========================================================================
-# PARTE 2: CREAZIONE DELLA COMMUNITY MATRIX PER STATISTICA MULTIVARIATA
-# =========================================================================
+# ==============================================================================
+# 4. FIGURA 3.3 (NUOVA) - FOO E RRA DELLE DUE AREE SUGLI STESSI ASSI
+# Risponde al commento "utilizza qualche barplot per una migliore comprensione":
+# i due grafici precedenti sono uno per area e non permettono il confronto.
+# ==============================================================================
 
-# 1. CARICAMENTO DEI DATASET PURIFICATI PER CAMPIONE
-file_slo <- "Slovenia wolves FILE DEFINITIVO.csv"
-file_cro <- "Croatian wolves FILE DEFINITIVO.csv"
+ordine_taxa <- c("Cervus elaphus", "Capreolus capreolus", "Sus scrofa",
+                 "Caprinae", "Rupicapra rupicapra", "Bos", "Capra",
+                 "Ovis", "Ovis aries", "Lepus")
 
-df_slo <- read_csv2(file_slo, show_col_types = FALSE)
-df_cro <- read_csv2(file_cro, show_col_types = FALSE)
+confronto <- expand_grid(Popolazione = c("Slovenia", "Croazia"),
+                         Preda = ordine_taxa) %>%
+  left_join(df_indici %>% dplyr::select(Popolazione, Preda,
+                                        FOO_percentuale, RRA_percentuale),
+            by = c("Popolazione", "Preda")) %>%
+  mutate(across(c(FOO_percentuale, RRA_percentuale), ~ replace_na(.x, 0)),
+         Preda = factor(Preda, levels = rev(ordine_taxa)),
+         Popolazione = factor(Popolazione, levels = c("Slovenia", "Croazia")))
 
-# 2. FUNZIONE CORAZZATA PER TRASPORRE E PREPARARE I DATI
-prepara_matrice <- function(df, nome_popolazione) {
-  
-  # Identifichiamo dinamicamente la colonna delle specie scientifiche
-  col_specie <- names(df)[grepl("scientific_name", names(df), ignore.case = TRUE)][1]
-  
-  # Rinominiamo la colonna specie in "Taxon" per uniformità
-  names(df)[names(df) == col_specie] <- "Taxon"
-  
-  # Rimuoviamo in blocco tutte le possibili colonne di metadati tassonomici
-  df <- df %>% select(-any_of(c("rank", "final rank", "species_list")))
-  
-  # Trasformiamo la tabella da formati orizzontali a verticali per il calcolo
-  df_long <- df %>% 
-    pivot_longer(cols = -Taxon, names_to = "Sample_ID", values_to = "Reads")
-  
-  df_wide <- df_long %>% 
-    pivot_wider(names_from = Taxon, values_from = Reads, values_fill = 0)
-  
-  # Aggiungiamo la colonna fondamentale della popolazione di appartenenza
-  df_wide$Popolazione <- nome_popolazione
-  
-  return(df_wide)
+pannello_confronto <- function(dati, colonna, titolo, asse) {
+  ggplot(dati, aes(x = .data[[colonna]], y = Preda, fill = Popolazione)) +
+    geom_col(position = position_dodge(width = 0.75), width = 0.7) +
+    geom_text(aes(label = ifelse(.data[[colonna]] > 0,
+                                 format(round(.data[[colonna]], 1), nsmall = 1),
+                                 "0")),
+              position = position_dodge(width = 0.75),
+              hjust = -0.15, size = 3.1) +
+    scale_fill_manual(values = COL_AREA, labels = LAB_AREA) +
+    scale_y_discrete(labels = etichette_taxa_plotmath) +
+    scale_x_continuous(limits = c(0, max(dati[[colonna]]) * 1.2),
+                       expand = c(0, 0)) +
+    labs(title = titolo, x = asse, y = NULL) +
+    tema_tesi
 }
 
-# 3. APPLICAZIONE DELLA FUNZIONE E UNIONE DELLE MATRICI
-mat_slo <- prepara_matrice(df_slo, "Slovenia")
-mat_cro <- prepara_matrice(df_cro, "Croazia")
+fig_confronto <-
+  pannello_confronto(confronto, "FOO_percentuale",
+                     "A  Frequency of occurrence",
+                     "Frequency of occurrence (%)") +
+  pannello_confronto(confronto, "RRA_percentuale",
+                     "B  Mean relative read abundance",
+                     "Mean relative read abundance (%)") +
+  plot_layout(guides = "collect") +
+  plot_annotation(
+    title = "Diet composition compared between geographic areas",
+    subtitle = paste("Caprinae denotes assignments retained at subfamily level",
+                     "and is not attributed to wild or domestic taxa"),
+    theme = theme(plot.title = element_text(face = "bold", size = 14))
+  ) &
+  theme(legend.position = "bottom")
 
-# Uniamo le due nazioni in un unico dataframe
-community_matrix <- bind_rows(mat_slo, mat_cro)
-community_matrix[is.na(community_matrix)] <- 0
-
-# Identifichiamo le colonne delle prede (escludendo Sample_ID e Popolazione)
-colonne_prede <- setdiff(names(community_matrix), c("Sample_ID", "Popolazione"))
-
-# 4. STANDARDIZZAZIONE IN RRA% PER OGNI CAMPIONE
-# Trasformiamo i conteggi di reads assolute in percentuali di RRA per riga
-community_matrix[colonne_prede] <- t(apply(community_matrix[colonne_prede], 1, function(x) {
-  totale <- sum(x)
-  if(totale > 0) { 
-    return((x / totale) * 100) 
-  } else { 
-    return(x) 
-  }
-}))
-
-# Riordiniamo le colonne mettendo ID e Popolazione all'inizio
-community_matrix <- community_matrix %>%
-  select(Sample_ID, Popolazione, everything())
-
-# Esportiamo il file CSV definitivo della Community Matrix
-write.csv2(community_matrix, "Community_Matrix_SloCro.csv", row.names = FALSE)
-
-print("Community Matrix creata con successo!")
-print(paste("Totale campioni (righe):", nrow(community_matrix)))
-print(paste("Totale specie preda (colonne):", length(colonne_prede)))
+ggsave("Figura_Confronto_FOO_RRA.png", fig_confronto,
+       width = 12, height = 5.5, dpi = 300)
 
 
-# =========================================================================
-# =========================================================================
-# PARTE 3 (CORRETTA): STATISTICA MULTIVARIATA — PERMANOVA e SIMPER
-# Ricalcolati su dati Hellinger-trasformati per essere coerenti con la PCoA
-# ufficiale e con il Betadisper già corretto. La versione precedente di
-# questo script (con NMDS) usava i dati RRA grezzi — qui invece PERMANOVA
-# e SIMPER lavorano sulla stessa identica matrice usata per PCoA/Betadisper.
-# =========================================================================
- 
-library(tidyverse)
-library(vegan)
- 
 # ==============================================================================
-# 1. CARICAMENTO DELLA COMMUNITY MATRIX
+# 5. COMMUNITY MATRIX (RRA% per singolo campione)
 # ==============================================================================
-df <- read_csv2("Community_Matrix_SloCro.csv", show_col_types = FALSE)
- 
-# Pulizia di sicurezza: rimuoviamo eventuali colonne fantasma o artefatti di join
-df <- df %>% select(-any_of("NA"))
- 
-# NOTA TASSONOMICA (risolta): la distinzione "Cervinae" vs "Cervus elaphus" per
-# la Slovenia era dovuta a un rank non aggiornato nei file grezzi. Confermato
-# tramite BLASTn che si tratta di Cervus elaphus a livello di specie in
-# entrambe le popolazioni — nessuna azione necessaria, dato già coerente.
- 
+
+community_matrix <- grezzi %>%
+  dplyr::select(Sample_ID, Popolazione, scientific_name, RRA_percentuale) %>%
+  pivot_wider(names_from = scientific_name,
+              values_from = RRA_percentuale,
+              values_fill = 0) %>%
+  dplyr::select(Sample_ID, Popolazione, all_of(ordine_taxa))
+
+stopifnot(nrow(community_matrix) == 100)
+write.csv2(community_matrix, OUT_COMMUNITY, row.names = FALSE)
+cat("\nCommunity matrix:", nrow(community_matrix), "campioni,",
+    length(ordine_taxa), "taxa\n")
+
+
 # ==============================================================================
-# 2. PREPARAZIONE DEI DATI PER IL PACCHETTO VEGAN
+# 6. FIGURA 3.4 (NUOVA) - OUTPUT DEL METABARCODING
+# Risponde al commento "manca tutto il capitolo di descrizione dei dati del
+# metabarcoding ottenuto dalle analisi".
 # ==============================================================================
-metadati <- df %>% select(Sample_ID, Popolazione)
-matrice_prede <- df %>% select(-Sample_ID, -Popolazione)
- 
-# Forziamo a numerico per evitare conflitti nel calcolo delle distanze
-matrice_prede <- as.data.frame(lapply(matrice_prede, as.numeric))
- 
+
+per_campione <- grezzi %>%
+  group_by(Sample_ID, Popolazione) %>%
+  summarise(n_taxa = sum(RRA_percentuale > 0),
+            reads  = first(totale_filtrato), .groups = "drop") %>%
+  mutate(Popolazione = factor(Popolazione, levels = c("Slovenia", "Croazia")),
+         n_taxa = factor(n_taxa, levels = 1:3,
+                         labels = c("1 taxon", "2 taxa", "3 taxa")),
+         classe_reads = cut(reads,
+            breaks = c(0, 10000, 50000, 100000, Inf),
+            labels = c("< 10,000", "10,000-50,000",
+                       "50,000-100,000", "> 100,000"),
+            right = FALSE))
+
+cat("\nTaxa per campione:\n");  print(table(per_campione$Popolazione,
+                                            per_campione$n_taxa))
+cat("\nReads per campione:\n"); print(table(per_campione$Popolazione,
+                                            per_campione$classe_reads))
+cat("\nMediana e intervallo dei reads per campione:\n")
+print(per_campione %>% group_by(Popolazione) %>%
+        summarise(mediana = median(reads), minimo = min(reads),
+                  massimo = max(reads), .groups = "drop"))
+# Atteso: 81 campioni su 100 con un solo taxon (36 Slovenia, 45 Croazia);
+# mediana 8,647 reads in Slovenia (2,110-110,813) e 58,579 in Croazia
+# (3,895-189,136).
+
+barre_percentuali <- function(dati, colonna, titolo) {
+  dati %>%
+    mutate(categoria = .data[[colonna]]) %>%
+    count(Popolazione, categoria, name = "n") %>%
+    group_by(Popolazione) %>%
+    mutate(pct = 100 * n / sum(n)) %>%
+    ungroup() %>%
+    ggplot(aes(x = pct, y = fct_rev(factor(categoria)), fill = Popolazione)) +
+    geom_col(position = position_dodge(width = 0.75), width = 0.7) +
+    geom_text(aes(label = sprintf("%.1f", pct)),
+              position = position_dodge(width = 0.75),
+              hjust = -0.15, size = 3.1) +
+    scale_fill_manual(values = COL_AREA, labels = LAB_AREA) +
+    scale_x_continuous(limits = c(0, 100), expand = c(0, 0)) +
+    labs(title = titolo, x = "Samples in the geographic area (%)", y = NULL) +
+    tema_tesi
+}
+
+fig_output <-
+  barre_percentuali(per_campione, "n_taxa",       "A  Prey taxa detected per sample") +
+  barre_percentuali(per_campione, "classe_reads", "B  Prey reads retained per sample") +
+  plot_layout(guides = "collect") +
+  plot_annotation(
+    title = "Metabarcoding output of the analytical dataset",
+    subtitle = paste("Percentages of the 49 Slovenian and 51 Croatian samples",
+                     "retained after filtering"),
+    theme = theme(plot.title = element_text(face = "bold", size = 14))
+  ) &
+  theme(legend.position = "bottom")
+
+ggsave("Figura_OutputMetabarcoding.png", fig_output,
+       width = 12, height = 4.8, dpi = 300)
+
+
 # ==============================================================================
-# 3. TRASFORMAZIONE DI HELLINGER
-# Stessa trasformazione già usata per la PCoA e il Betadisper — necessaria
-# per coerenza metodologica tra tutte le analisi multivariate della tesi.
+# 7. AMPIEZZA DI NICCHIA (LEVINS) E SOVRAPPOSIZIONE (PIANKA)
 # ==============================================================================
+
+rra_matrice <- rra_pop %>%
+  pivot_wider(names_from = scientific_name,
+              values_from = RRA_percentuale, values_fill = 0)
+
+n_categorie <- ncol(rra_matrice) - 1          # 10, non piu' scritto a mano
+stopifnot(n_categorie == 10)
+
+levins_finale <- rra_matrice %>%
+  rowwise() %>%
+  mutate(B   = 1 / sum(c_across(-Popolazione)^2 / 10000),
+         B_A = (B - 1) / (n_categorie - 1)) %>%
+  ungroup() %>%
+  dplyr::select(Popolazione, B_A)
+print(levins_finale)      # atteso: Slovenia 0.193, Croazia 0.268
+
+p_slo <- as.numeric(rra_matrice[rra_matrice$Popolazione == "Slovenia", -1]) / 100
+p_cro <- as.numeric(rra_matrice[rra_matrice$Popolazione == "Croazia",  -1]) / 100
+pianka_finale <- sum(p_slo * p_cro) / sqrt(sum(p_slo^2) * sum(p_cro^2))
+cat("\nIndice di Pianka:", round(pianka_finale, 3), "\n")   # atteso 0.930
+
+
+# ==============================================================================
+# 8. STATISTICA MULTIVARIATA: HELLINGER, PERMANOVA, BETADISPER, SIMPER
+# Tutte e tre le analisi lavorano sulla STESSA matrice trasformata, cosi' il
+# test di dispersione valida davvero le assunzioni del PERMANOVA.
+# ==============================================================================
+
+df_mv <- read_csv2(OUT_COMMUNITY, show_col_types = FALSE)
+metadati       <- df_mv %>% dplyr::select(Sample_ID, Popolazione)
+matrice_prede  <- df_mv %>% dplyr::select(all_of(ordine_taxa)) %>%
+                   mutate(across(everything(), as.numeric)) %>% as.data.frame()
+
 matrice_hellinger <- decostand(matrice_prede, method = "hellinger")
- 
-# ==============================================================================
-# 4. PERMANOVA (su dati Hellinger-trasformati)
-# ==============================================================================
-set.seed(123)
-permanova_risultato <- adonis2(matrice_hellinger ~ Popolazione, data = metadati,
-                                 method = "bray", permutations = 9999)
- 
-print(" ")
-print("==================================================")
-print("        RISULTATO PERMANOVA (Hellinger)          ")
-print("==================================================")
-print(permanova_risultato)
-# NB: il valore chiave è nella colonna Pr(>F) per il p-value e in R2 per la
-# percentuale di varianza spiegata
- 
-# ==============================================================================
-# 5. SIMPER (su dati Hellinger-trasformati)
-# ==============================================================================
-set.seed(123)
-simper_risultato <- simper(matrice_hellinger, group = metadati$Popolazione, permutations = 999)
- 
-print(" ")
-print("==================================================")
-print("          RISULTATO SIMPER (Hellinger)            ")
-print("==================================================")
-print(summary(simper_risultato))
-#plotting di SIMPER
-library(ggplot2)
-library(dplyr)
+dist_matrix       <- vegdist(matrice_hellinger, method = "bray")
 
-# Estraggo la tabella completa direttamente dall'oggetto simper già calcolato
-# (fonte unica, niente numeri ricopiati a mano)
+# --- PERMANOVA ---------------------------------------------------------------
+set.seed(123)
+permanova_risultato <- adonis2(dist_matrix ~ Popolazione, data = metadati,
+                               permutations = 9999, by = "terms")
+cat("\n=== PERMANOVA ===\n"); print(permanova_risultato)
+# atteso: R2 = 0.02349, F = 2.357, p = 0.0731
+
+# --- BETADISPER (in inglese) --------------------------------------------------
+# Le etichette dei centroidi nel grafico di betadisper sono i livelli del
+# fattore: vanno rinominate qui, altrimenti dentro la figura resta "Croazia".
+gruppo <- factor(metadati$Popolazione, levels = c("Slovenia", "Croazia"),
+                 labels = c("Slovenia", "Croatia"))
+dispersion_mod <- betadisper(dist_matrix, group = gruppo)
+
+set.seed(123)
+cat("\n=== BETADISPER ===\n")
+print(permutest(dispersion_mod, permutations = 999))
+print(dispersion_mod$group.distances)
+# atteso: F = 3.744, p = 0.063; distanze medie 0.486 Slovenia, 0.571 Croazia.
+# Nota: vegan avvisa che alcune distanze al quadrato sono negative e le porta a
+# zero. E' il motivo per cui questi valori non si riproducono con un calcolo
+# fatto a mano che tratti diversamente gli autovalori negativi della matrice di
+# Bray-Curtis. I numeri da usare in tesi sono quelli stampati qui.
+
+png("Betadisper_Plot_final.png", width = 2000, height = 1600, res = 300)
+plot(dispersion_mod, hull = FALSE, ellipse = TRUE,
+     main = "Multivariate dispersion of diet composition",
+     sub  = "Bray-Curtis dissimilarity on Hellinger-transformed RRA proportions",
+     col = unname(COL_AREA),
+     lwd = 2, seg.col = "grey80", seg.lwd = 0.5)
+legend("topleft", legend = levels(gruppo),
+       col = unname(COL_AREA), pch = 16, bty = "n", cex = 1.1)
+dev.off()
+
+# --- SIMPER -------------------------------------------------------------------
+set.seed(123)
+simper_risultato <- simper(matrice_hellinger, group = metadati$Popolazione,
+                           permutations = 999)
+cat("\n=== SIMPER ===\n"); print(summary(simper_risultato))
+
 simper_summary <- summary(simper_risultato)[[1]]
 simper_summary$Taxon <- rownames(simper_summary)
-
 simper_summary <- simper_summary %>%
-  mutate(
-    Taxon = gsub("\\.", " ", Taxon),  # ripristina lo spazio nei nomi (es. "Capreolus capreolus")
-    contributo_pct = round(average / sum(average) * 100, 1),
-    sig_label = case_when(
-      p < 0.001 ~ "***",
-      p < 0.01  ~ "**",
-      p < 0.05  ~ "*",
-      TRUE      ~ ""
-    ),
-    significativo = p < 0.05
-  ) %>%
+  mutate(Taxon = gsub("\\.", " ", Taxon),
+         contributo_pct = round(average / sum(average) * 100, 1),
+         sig_label = case_when(p < 0.001 ~ "***", p < 0.01 ~ "**",
+                               p < 0.05  ~ "*",   TRUE     ~ ""),
+         significativo = p < 0.05) %>%
   arrange(desc(contributo_pct))
 
-# Grafico — TUTTI i taxa, non solo i primi 5, colorati per significatività
-plot_simper <- ggplot(simper_summary, aes(x = reorder(Taxon, contributo_pct), 
-                                            y = contributo_pct, fill = significativo)) +
+plot_simper <- ggplot(simper_summary,
+                      aes(x = reorder(Taxon, contributo_pct),
+                          y = contributo_pct, fill = significativo)) +
   geom_col() +
   geom_text(aes(label = paste0(contributo_pct, "% ", sig_label)),
             hjust = -0.1, fontface = "bold", size = 3.8) +
   coord_flip() +
-  scale_fill_manual(values = c("TRUE" = "#B22222", "FALSE" = "#003f5c"),
-                     labels = c("TRUE" = "p < 0.05", "FALSE" = "n.s."),
-                     name = NULL) +
+  scale_fill_manual(values = c("TRUE" = "#C73E1D", "FALSE" = "#1F7FB5"),
+                    labels = c("TRUE" = "p < 0.05", "FALSE" = "n.s.")) +
   expand_limits(y = max(simper_summary$contributo_pct) * 1.15) +
-  labs(
-    title = "SIMPER analysis: taxon contributions to between-area dissimilarity",
-    subtitle = "Slovenia vs Croatia | Bray-Curtis dissimilarity on Hellinger-transformed RRA proportions\n(* p < 0.05, ** p < 0.01, *** p < 0.001)",
-    x = NULL, y = "Contribution to overall Bray-Curtis dissimilarity (%)"
-  ) +
-  theme_minimal(base_size = 13) +
-  theme(plot.title = element_text(face = "bold"), legend.position = "top")
+  labs(title = "SIMPER: taxon contributions to between-area dissimilarity",
+       subtitle = paste("Bray-Curtis dissimilarity on Hellinger-transformed",
+                        "RRA proportions (* p < 0.05, ** p < 0.01, *** p < 0.001)"),
+       x = NULL, y = "Contribution to overall dissimilarity (%)") +
+  tema_tesi + theme(legend.position = "top")
 
-print(plot_simper)
-ggsave("Grafico_SIMPER_corretto.png", plot_simper, width = 10, height = 7, dpi = 300)
-
-# ==============================================================================
-# ANALISI DELLA DISPERSIONE MULTIVARIATA (BETADISPER) — versione corretta
-# Coerente con la trasformazione di Hellinger già usata nella PCoA/PERMANOVA
-# ufficiale della tesi (Sezione 2.5). Autosufficiente: nessuna dipendenza da
-# script precedenti o oggetti già in memoria.
-# ==============================================================================
-
-library(tidyverse)
-library(vegan)
-
-# ==============================================================================
-# 1. CARICAMENTO DATI
-# ==============================================================================
-dataset_lupo <- read_csv2("Community_Matrix_SloCro.csv",
-                           locale = locale(decimal_mark = ","),
-                           show_col_types = FALSE)
-
-dataset_lupo$Popolazione <- as.factor(dataset_lupo$Popolazione)
-
-taxa_cols <- c("Capreolus capreolus", "Caprinae", "Cervus elaphus", "Ovis aries",
-               "Rupicapra rupicapra", "Sus scrofa", "Bos", "Capra", "Lepus", "Ovis")
-
-# Rete di sicurezza per il parsing numerico (ridondante se read_csv2 ha già
-# interpretato correttamente il separatore decimale, ma innocua)
-for (col in taxa_cols) {
-  dataset_lupo[[col]] <- as.numeric(gsub(",", ".", dataset_lupo[[col]]))
-}
-
-matrice_prede <- dataset_lupo %>% select(all_of(taxa_cols))
-
-cat("N campioni:", nrow(matrice_prede), "\n")
-cat("N taxa:", ncol(matrice_prede), "\n")
-cat("Popolazioni:", paste(levels(dataset_lupo$Popolazione), collapse = ", "), "\n")
-
-# ==============================================================================
-# 2. TRASFORMAZIONE DI HELLINGER
-# Stessa trasformazione della PCoA/PERMANOVA ufficiale: Betadisper deve validare
-# le assunzioni dello STESSO test, quindi va calcolato sulla stessa matrice
-# trasformata, non sui dati grezzi.
-# ==============================================================================
-matrice_hellinger <- decostand(matrice_prede, method = "hellinger")
-
-# ==============================================================================
-# 3. MATRICE DI DISTANZA E BETADISPER
-# ==============================================================================
-dist_matrix <- vegdist(matrice_hellinger, method = "bray")
-
-dispersion_mod <- betadisper(dist_matrix, group = dataset_lupo$Popolazione)
-
-# ==============================================================================
-# 4. TEST DI PERMUTAZIONE
-# ==============================================================================
-set.seed(123)
-cat("\n--- Risultato Test di Permutazione per Betadisper (Hellinger) ---\n")
-test_dispersion <- permutest(dispersion_mod, permutations = 999)
-print(test_dispersion)
-
-# ==============================================================================
-# 5. DISTANZA MEDIA DAI CENTROIDI (ampiezza di nicchia multivariata)
-# ==============================================================================
-cat("\n--- Distanza media dai centroidi (più alta = dieta più variabile) ---\n")
-print(dispersion_mod$group.distances)
-
-# ==============================================================================
-# 6. GRAFICO
-# ==============================================================================
-png("Betadisper_Plot.png", width = 2000, height = 1600, res = 300)
-plot(dispersion_mod, hull = FALSE, ellipse = TRUE,
-     main = "Dispersione Multivariata della Dieta (Hellinger + Bray-Curtis)",
-     col = c("#009E73", "#CC79A7"),
-     lwd = 2, seg.col = "gray80", seg.lwd = 0.5)
-legend("topleft", legend = levels(dataset_lupo$Popolazione),
-       col = c("#009E73", "#CC79A7"), pch = 16, bty = "n", cex = 1.2)
-dev.off()
-
-cat("\nGrafico esportato come 'Betadisper_Plot.png'\n")
-
+ggsave("Grafico_SIMPER_final.png", plot_simper, width = 10, height = 7, dpi = 300)
 
 
 # ==============================================================================
-# RICOSTRUZIONE DEFINITIVA DEL GRAFICO PCoA
-# Bray-Curtis su dati Hellinger-trasformati, stessa metodologia già validata
-# per RDA e Betadisper. Stesse 6 categorie di preda aggregate (Cervo, Capriolo,
-# Cinghiale, Caprinae, Camoscio, Domestico) per coerenza visiva con la RDA.
-# Autosufficiente: nessuna dipendenza da script precedenti.
+# 9. PCoA SUI 10 TAXA (Figura 3.5) E TIPI DI DIETA (Figura 3.6)
+#
+# PUNTO CENTRALE: la versione precedente calcolava la PCoA sulle 6 categorie
+# aggregate e otteneva 52.70% + 27.06%. La figura della tesi riporta
+# 52.70% + 26.72%, che e' la versione sui 10 taxa. Qui si usano i 10 taxa.
+#
+# Secondo punto: 81 campioni su 100 contengono un solo taxon, quindi campioni
+# con lo stesso profilo cadono ESATTAMENTE nello stesso punto. I 100 campioni
+# occupano 25 posizioni distinte, di cui una con 35 campioni e una con 33. Il
+# jitter casuale della versione precedente nascondeva questo fatto; qui la
+# dimensione del punto e' il numero di campioni sovrapposti.
 # ==============================================================================
 
-library(tidyverse)
-library(vegan)
-library(ggrepel)
-
-# ==============================================================================
-# 1. CARICAMENTO DATI E AGGREGAZIONE SPECIE DOMESTICHE
-# ==============================================================================
-df <- read_csv2("Community_Matrix_SloCro.csv", show_col_types = FALSE)
-
-df <- df %>%
-  mutate(Domestico = `Ovis aries` + Bos + Capra + Ovis)
-
-taxa_cols <- c("Cervus elaphus", "Capreolus capreolus", "Sus scrofa",
-               "Caprinae", "Rupicapra rupicapra", "Domestico")
-
-for (col in taxa_cols) {
-  df[[col]] <- as.numeric(gsub(",", ".", as.character(df[[col]])))
-}
-
-metadati <- df %>% select(Sample_ID, Popolazione)
-matrice_prede <- df %>% select(all_of(taxa_cols))
-
-cat("N campioni:", nrow(matrice_prede), " N categorie:", ncol(matrice_prede), "\n")
-
-# ==============================================================================
-# 2. TRASFORMAZIONE DI HELLINGER E DISTANZA DI BRAY-CURTIS
-# ==============================================================================
-matrice_hellinger <- decostand(matrice_prede, method = "hellinger")
-dist_matrix <- vegdist(matrice_hellinger, method = "bray")
-
-# ==============================================================================
-# 3. PCoA (Principal Coordinates Analysis)
-# ==============================================================================
 pcoa_result <- cmdscale(dist_matrix, k = 2, eig = TRUE)
 
-# Percentuale di varianza spiegata per i primi due assi (solo autovalori positivi)
 eig_positivi <- pcoa_result$eig[pcoa_result$eig > 0]
 var_asse1 <- round(100 * pcoa_result$eig[1] / sum(eig_positivi), 2)
 var_asse2 <- round(100 * pcoa_result$eig[2] / sum(eig_positivi), 2)
-cat("Varianza spiegata: asse 1 =", var_asse1, "% , asse 2 =", var_asse2, "%\n")
+cat("\nPCoA - varianza spiegata: asse 1 =", var_asse1,
+    "%, asse 2 =", var_asse2, "%\n")
+stopifnot(abs(var_asse1 - 52.70) < 0.01, abs(var_asse2 - 26.72) < 0.01)
 
 site_scores <- as.data.frame(pcoa_result$points)
 colnames(site_scores) <- c("PCoA1", "PCoA2")
-site_scores$Popolazione <- metadati$Popolazione
+site_scores$Popolazione <- factor(metadati$Popolazione,
+                                  levels = c("Slovenia", "Croazia"))
 
-# ==============================================================================
-# 4. SCORE DELLE SPECIE (medie pesate — wascores, standard per PCoA/NMDS)
-# ==============================================================================
-species_scores <- as.data.frame(wascores(site_scores[, c("PCoA1", "PCoA2")], matrice_prede))
+# Quanti campioni occupano ciascuna posizione
+site_points <- site_scores %>%
+  mutate(x = round(PCoA1, 8), y = round(PCoA2, 8)) %>%
+  count(x, y, Popolazione, name = "n_campioni") %>%
+  # scostamento fisso (non casuale) per separare le due aree quando
+  # condividono la stessa posizione: dichiarato in didascalia
+  mutate(x_plot = x + if_else(Popolazione == "Slovenia", -0.012, 0.012))
+
+# distinct() sulle coordinate non arrotondate conta 69 posizioni: e' rumore in
+# virgola mobile, non struttura del dato. Va arrotondato, come per site_points.
+cat("\nProfili dietetici distinti:",
+    nrow(distinct(round(as.data.frame(matrice_hellinger), 10))), "\n")
+cat("Posizioni distinte nel piano dei primi due assi:",
+    nrow(distinct(site_points, x, y)), "\n")
+cat("Campioni per posizione (prime righe):\n")
+print(site_points %>% arrange(desc(n_campioni)) %>% head(8))
+# atteso: 25 profili distinti ma 24 posizioni distinte nel piano; 35 campioni
+# sulla posizione "solo Cervus elaphus" e 33 su "solo Capreolus capreolus"
+# sommando le due aree
+
+species_scores <- as.data.frame(
+  wascores(site_scores[, c("PCoA1", "PCoA2")], matrice_prede))
 species_scores$Taxon <- rownames(species_scores)
 
-# ==============================================================================
-# 5. GRAFICO
-# ==============================================================================
-palette_nazioni <- c("Croazia" = "#E69F00", "Slovenia" = "#56B4E9")
-etichette_nazioni <- c("Croazia" = "Croatia", "Slovenia" = "Slovenia")
-
-plot_pcoa <- ggplot(site_scores, aes(x = PCoA1, y = PCoA2)) +
-  geom_point(aes(color = Popolazione, fill = Popolazione),
-             size = 2.5, alpha = 0.6,
-             position = position_jitter(width = 0.02, height = 0.02)) +
-  stat_ellipse(aes(color = Popolazione, fill = Popolazione),
-               geom = "polygon", alpha = 0.15, level = 0.95, linewidth = 0.8) +
+plot_pcoa <- ggplot() +
+  stat_ellipse(data = site_scores,
+               aes(x = PCoA1, y = PCoA2,
+                   colour = Popolazione, fill = Popolazione),
+               geom = "polygon", alpha = 0.12, level = 0.95, linewidth = 0.8) +
+  geom_point(data = site_points,
+             aes(x = x_plot, y = y, colour = Popolazione,
+                 fill = Popolazione, size = n_campioni),
+             alpha = 0.65, shape = 21, stroke = 0.4) +
   geom_point(data = species_scores, aes(x = PCoA1, y = PCoA2),
-             color = "#B22222", size = 3) +
-  geom_text_repel(data = species_scores, aes(x = PCoA1, y = PCoA2, label = Taxon),
-                   color = "black", fontface = "bold.italic", size = 4.2,
-                   seed = 123, max.overlaps = 20) +
-  scale_color_manual(values = palette_nazioni, labels = etichette_nazioni) +
-  scale_fill_manual(values = palette_nazioni, labels = etichette_nazioni) +
-  labs(
-    title = "Dietary niche space (Principal Coordinates Analysis, PCoA)",
-    subtitle = paste0("Bray-Curtis dissimilarity on Hellinger-transformed RRA proportions | Variance explained: ",
-                       var_asse1, "% + ", var_asse2, "%"),
-    x = paste0("Coordinate 1 (", var_asse1, "%)"),
-    y = paste0("Coordinate 2 (", var_asse2, "%)")
-  ) +
-  theme_minimal(base_size = 13) +
-  theme(
-    plot.title = element_text(face = "bold"),
-    legend.title = element_blank(),
-    legend.position = "bottom"
-  )
+             colour = "#B22222", size = 3) +
+  geom_text_repel(data = species_scores,
+                  aes(x = PCoA1, y = PCoA2, label = Taxon),
+                  fontface = "bold.italic", size = 4, seed = 123,
+                  max.overlaps = 20) +
+  scale_colour_manual(values = COL_AREA, labels = LAB_AREA) +
+  scale_fill_manual(values = COL_AREA, labels = LAB_AREA) +
+  scale_size_continuous(name = "Samples at the same position",
+                        range = c(2.5, 14), breaks = c(1, 5, 10, 20, 35)) +
+  labs(colour = NULL, fill = NULL,
+       title = "Dietary niche space (Principal Coordinates Analysis)",
+       subtitle = paste0("Bray-Curtis dissimilarity on Hellinger-transformed ",
+                         "RRA proportions, 10 prey taxa | ",
+                         var_asse1, "% + ", var_asse2, "% of positive eigenvalues"),
+       x = paste0("Coordinate 1 (", var_asse1, "%)"),
+       y = paste0("Coordinate 2 (", var_asse2, "%)")) +
+  tema_tesi +
+  # tema_tesi azzera i titoli di legenda: qui serve quello della dimensione
+  theme(legend.position = "bottom", legend.box = "vertical",
+        legend.title = element_text(size = 9, colour = "grey25"))
 
-print(plot_pcoa)
-ggsave("Grafico_PCoA_Definitivo_Tesi.png", plot_pcoa, width = 10, height = 7.5, dpi = 300)
+ggsave("Grafico_PCoA_final.png", plot_pcoa, width = 10, height = 8, dpi = 300)
 
-cat("\nGrafico salvato: Grafico_PCoA_Definitivo_Tesi.png\n")
-# Fine del Master Script
-# ==============================================================================
-# ATTO 1 ESTESO — Selezione della preda principale, con Cinghiale integrato
-# Analisi gerarchica a due livelli + grafico finale a due pannelli.
-# Autosufficiente: nessuna dipendenza da script precedenti.
-# Usa il file Community_Matrix_SloCro.csv fornito (colonna "Popolazione").
-# ==============================================================================
+# --- Figura 3.6: tipi di dieta ------------------------------------------------
+tipi_dieta <- grezzi %>%
+  filter(RRA_percentuale > 0) %>%
+  group_by(Sample_ID, Popolazione) %>%
+  summarise(n_taxa = n(),
+            dominante = scientific_name[which.max(RRA_percentuale)],
+            .groups = "drop") %>%
+  mutate(tipo = case_when(
+    n_taxa > 1 ~ "Mixed (>1 taxon)",
+    dominante %in% c("Bos", "Capra", "Ovis", "Ovis aries") ~ "Domestic livestock only",
+    TRUE ~ paste(dominante, "only")))
 
-library(readr)
-library(dplyr)
-library(ggplot2)
-library(patchwork)   # install.packages("patchwork") se non ce l'hai
+ordine_tipi <- c("Cervus elaphus only", "Capreolus capreolus only",
+                 "Mixed (>1 taxon)", "Sus scrofa only",
+                 "Caprinae only", "Domestic livestock only")
 
-# ==============================================================================
-# 1. CARICAMENTO E PREPARAZIONE DATI
-# ==============================================================================
-community <- read_csv2("Community_Matrix_SloCro.csv", locale = locale(decimal_mark = ","))
-ndvi      <- read_csv2("Wolf_NDVI_Dynamic_Dinaric.csv", locale = locale(decimal_mark = ","))
+riepilogo_tipi <- expand_grid(Popolazione = c("Slovenia", "Croazia"),
+                              tipo = ordine_tipi) %>%
+  left_join(count(tipi_dieta, Popolazione, tipo, name = "n"),
+            by = c("Popolazione", "tipo")) %>%
+  mutate(n = replace_na(n, 0)) %>%
+  group_by(Popolazione) %>%
+  mutate(pct = 100 * n / sum(n)) %>%
+  ungroup() %>%
+  mutate(tipo = factor(tipo, levels = rev(ordine_tipi)),
+         Popolazione = factor(Popolazione, levels = c("Slovenia", "Croazia")))
 
-# Nel file fornito la colonna si chiama "Popolazione". La rinominiamo qui in
-# inglese e senza spazi per usarla nei modelli e nei grafici successivi.
-stopifnot(all(c("Sample_ID", "Popolazione") %in% names(community)))
-community <- community %>% rename(Geographic_Area = Popolazione)
+print(riepilogo_tipi, n = Inf)
+# atteso: Cervus only 15 SLO / 20 CRO; Capreolus only 18 / 15; misti 13 / 6;
+# Sus only 1 / 7; Caprinae only 2 / 1; domestici 0 / 2
 
-df <- community %>%
-  inner_join(ndvi %>% select(Sample, ELEV_mean, NDVI_mean, NDVI_sd),
-             by = c("Sample_ID" = "Sample"))
-
-stopifnot(nrow(df) == 100)
-
-# Standardizzazione predittori (coerente con l'analisi Python già validata)
-df$ELEV_mean_z <- as.numeric(scale(df$ELEV_mean))
-df$NDVI_mean_z <- as.numeric(scale(df$NDVI_mean))
-df$NDVI_sd_z   <- as.numeric(scale(df$NDVI_sd))
-
-# ==============================================================================
-# 2. UNIVERSO DI ANALISI — campioni con almeno una tra Cervo/Capriolo/Cinghiale
-#    come specie dominante (max %RRA tra le tre)
-# ==============================================================================
-df_sub <- df %>%
-  filter(`Cervus elaphus` > 0 | `Capreolus capreolus` > 0 | `Sus scrofa` > 0) %>%
-  rowwise() %>%
-  mutate(
-    dominante = c("Cervus elaphus", "Capreolus capreolus", "Sus scrofa")[
-      which.max(c_across(c(`Cervus elaphus`, `Capreolus capreolus`, `Sus scrofa`)))
-    ]
-  ) %>%
-  ungroup()
-
-cat("N campioni nell'universo a 3 prede:", nrow(df_sub), "\n")
-cat("Distribuzione preda dominante:\n")
-print(table(df_sub$dominante))
-
-# ==============================================================================
-# 3. LIVELLO 1 — Cinghiale-dominante vs Cervidi-dominante (Cervo+Capriolo insieme)
-# ==============================================================================
-df_sub$is_boar_dominant <- as.integer(df_sub$dominante == "Sus scrofa")
-
-modello_livello1 <- glm(
-  is_boar_dominant ~ ELEV_mean_z + NDVI_mean_z,
-  data = df_sub,
-  family = binomial(link = "logit")
-)
-
-cat("\n", strrep("=", 70), "\n")
-cat("LIVELLO 1 — Cinghiale-dominante vs Cervidi-dominante\n")
-cat(strrep("=", 70), "\n")
-print(summary(modello_livello1))
-cat("\nOdds Ratio e IC 95%:\n")
-print(exp(cbind(OR = coef(modello_livello1), confint(modello_livello1))))
-
-# ==============================================================================
-# 4. LIVELLO 2 — dentro i Cervidi: Cervo vs Capriolo
-# ==============================================================================
-df_cervidi <- df_sub %>% filter(dominante != "Sus scrofa")
-df_cervidi$is_cervo_dominant <- as.integer(df_cervidi$dominante == "Cervus elaphus")
-
-modello_livello2 <- glm(
-  is_cervo_dominant ~ ELEV_mean_z + NDVI_mean_z,
-  data = df_cervidi,
-  family = binomial(link = "logit")
-)
-
-cat("\n", strrep("=", 70), "\n")
-cat("LIVELLO 2 — dentro i Cervidi: Cervo vs Capriolo\n")
-cat(strrep("=", 70), "\n")
-print(summary(modello_livello2))
-cat("\nOdds Ratio e IC 95%:\n")
-print(exp(cbind(OR = coef(modello_livello2), confint(modello_livello2))))
-
-# ==============================================================================
-# 5. CONTROLLO SUPPLEMENTARE — NDVI_sd come predittore del Cinghiale
-#    (documentato, non nel modello finale: non significativo)
-# ==============================================================================
-modello_check_ndvi_sd <- glm(
-  as.integer(`Sus scrofa` > 0) ~ NDVI_sd_z,
-  data = df,
-  family = binomial(link = "logit")
-)
-cat("\n", strrep("=", 70), "\n")
-cat("CONTROLLO — presenza Cinghiale ~ NDVI_sd (per documentazione, non nel modello finale)\n")
-cat(strrep("=", 70), "\n")
-print(summary(modello_check_ndvi_sd))
-
-# ==============================================================================
-# 6. GRAFICO — due pannelli affiancati
-# ==============================================================================
-palette_area <- c("Croazia" = "#C73E1D", "Slovenia" = "#2E86AB")
-etichette_area <- c("Croazia" = "Croatia", "Slovenia" = "Slovenia")
-# Stessa palette del grafico HHH. Se la RDA usa ancora "#E69F00"/"#56B4E9",
-# allineala anche lei a questi due colori per coerenza tra le tre figure.
-
-elev_range <- range(df_sub$ELEV_mean)
-grid_elev <- seq(elev_range[1], elev_range[2], length.out = 200)
-grid_elev_z <- (grid_elev - mean(df_sub$ELEV_mean)) / sd(df_sub$ELEV_mean)
-
-predici_curva <- function(modello, grid_z, ndvi_z_fisso = 0) {
-  nd <- data.frame(ELEV_mean_z = grid_z, NDVI_mean_z = ndvi_z_fisso)
-  pred <- predict(modello, newdata = nd, type = "link", se.fit = TRUE)
-  p <- plogis(pred$fit)
-  lower <- plogis(pred$fit - 1.96 * pred$se.fit)
-  upper <- plogis(pred$fit + 1.96 * pred$se.fit)
-  data.frame(ELEV_mean = grid_elev, p = p, lower = lower, upper = upper)
+etichette_tipi <- function(x) {
+  parse(text = vapply(x, function(v) {
+    if (v == "Mixed (>1 taxon)")        return("plain('Mixed (>1 taxon)')")
+    if (v == "Caprinae only")           return("plain('Caprinae only')")
+    if (v == "Domestic livestock only") return("plain('Domestic livestock only')")
+    sp <- sub(" only$", "", v)
+    sprintf("italic('%s')~plain('only')", sp)
+  }, character(1)))
 }
 
-curva1 <- predici_curva(modello_livello1, grid_elev_z)
-curva2 <- predici_curva(modello_livello2, grid_elev_z)
+plot_tipi <- ggplot(riepilogo_tipi, aes(x = pct, y = tipo, fill = Popolazione)) +
+  geom_col(position = position_dodge(width = 0.75), width = 0.7) +
+  geom_text(aes(label = ifelse(n > 0, sprintf("%.1f%%", pct), "0")),
+            position = position_dodge(width = 0.75), hjust = -0.15, size = 3.2) +
+  scale_fill_manual(values = COL_AREA, labels = LAB_AREA) +
+  scale_y_discrete(labels = etichette_tipi) +
+  scale_x_continuous(limits = c(0, 48), expand = c(0, 0)) +
+  labs(title = "Distribution of samples by diet type",
+       subtitle = "81 of 100 samples contained a single prey taxon",
+       x = "Percentage of samples in the geographic area (%)", y = NULL) +
+  tema_tesi + theme(legend.position = "bottom")
 
-# --- Pannello A: Livello 1 ---
-panelA <- ggplot() +
-  geom_ribbon(data = curva1, aes(x = ELEV_mean, ymin = lower, ymax = upper),
-              fill = "grey70", alpha = 0.4) +
-  geom_line(data = curva1, aes(x = ELEV_mean, y = p), color = "black", linewidth = 1) +
-  geom_jitter(data = df_sub,
-              aes(x = ELEV_mean, y = is_boar_dominant, color = Geographic_Area),
-              width = 0, height = 0.03, size = 2.2, alpha = 0.7) +
-  scale_color_manual(values = palette_area, labels = etichette_area,
-                     name = "Geographic area") +
+ggsave("Figura_TipiDieta.png", plot_tipi, width = 9.5, height = 5.5, dpi = 300)
+
+
+# ==============================================================================
+# 10. MODELLI DIETA-AMBIENTE
+# ==============================================================================
+
+ambiente <- read_csv2(FILE_AMBIENTE, locale = locale(decimal_mark = ","),
+                      show_col_types = FALSE)
+
+df_env <- df_mv %>%
+  inner_join(ambiente %>% dplyr::select(Sample, ELEV_mean, NDVI_mean, NDVI_sd),
+             by = c("Sample_ID" = "Sample")) %>%
+  rename(Geographic_Area = Popolazione)
+stopifnot(nrow(df_env) == 100)
+
+df_env <- df_env %>%
+  mutate(ELEV_mean_z = as.numeric(scale(ELEV_mean)),
+         NDVI_mean_z = as.numeric(scale(NDVI_mean)),
+         NDVI_sd_z   = as.numeric(scale(NDVI_sd)),
+         Geographic_Area = relevel(factor(Geographic_Area), ref = "Slovenia"),
+         ricchezza = rowSums(across(all_of(ordine_taxa)) > 0),
+         Dieta_mista = as.integer(ricchezza > 1))
+
+cat("\nCampioni a preda singola / misti:",
+    sum(df_env$Dieta_mista == 0), "/", sum(df_env$Dieta_mista == 1), "\n")
+stopifnot(sum(df_env$Dieta_mista) == 19)
+
+
+# --- 10.1 HABITAT HETEROGENEITY HYPOTHESIS ------------------------------------
+modello_hhh <- glm(Dieta_mista ~ NDVI_sd_z + ELEV_mean_z + Geographic_Area,
+                   data = df_env, family = binomial(link = "logit"))
+
+cat("\n=== HHH ===\n"); print(summary(modello_hhh))
+cat("\nOdds ratio e IC 95% da profilo di verosimiglianza (richiede MASS):\n")
+print(exp(cbind(OR = coef(modello_hhh), confint(modello_hhh))))
+# atteso: NDVI_sd_z OR = 2.860, IC [1.641, 5.448], p = 0.00049
+
+# Test del rapporto di verosimiglianza sull'interazione (riportato in tesi)
+modello_hhh_int <- update(modello_hhh, . ~ . + NDVI_sd_z:Geographic_Area)
+cat("\nTest dell'interazione NDVI_sd x area:\n")
+print(anova(modello_hhh, modello_hhh_int, test = "LRT"))
+# atteso: chi2(1) = 0.184, p = 0.668
+
+# Curve predette DAL MODELLO RIPORTATO IN TESI, per area, a quota media.
+# (La versione precedente usava geom_smooth(), che rifitta un modello
+#  univariato su NDVI_sd e quindi disegnava una curva diversa da quella del
+#  modello discusso nel testo.)
+griglia_hhh <- expand_grid(
+    NDVI_sd = seq(min(df_env$NDVI_sd), max(df_env$NDVI_sd), length.out = 200),
+    Geographic_Area = factor(c("Slovenia", "Croazia"),
+                             levels = levels(df_env$Geographic_Area))) %>%
+  mutate(NDVI_sd_z  = (NDVI_sd - mean(df_env$NDVI_sd)) / sd(df_env$NDVI_sd),
+         ELEV_mean_z = 0)
+
+pred_hhh <- predict(modello_hhh, newdata = griglia_hhh,
+                    type = "link", se.fit = TRUE)
+griglia_hhh <- griglia_hhh %>%
+  mutate(p  = plogis(pred_hhh$fit),
+         lo = plogis(pred_hhh$fit - 1.96 * pred_hhh$se.fit),
+         hi = plogis(pred_hhh$fit + 1.96 * pred_hhh$se.fit))
+
+plot_hhh <- ggplot() +
+  geom_ribbon(data = griglia_hhh,
+              aes(x = NDVI_sd, ymin = lo, ymax = hi, fill = Geographic_Area),
+              alpha = 0.18) +
+  geom_line(data = griglia_hhh,
+            aes(x = NDVI_sd, y = p, colour = Geographic_Area), linewidth = 1) +
+  geom_point(data = df_env,
+             aes(x = NDVI_sd, y = Dieta_mista, colour = Geographic_Area),
+             position = position_jitter(width = 0, height = 0.025),
+             size = 2.3, alpha = 0.7) +
+  scale_colour_manual(values = COL_AREA, labels = LAB_AREA) +
+  scale_fill_manual(values = COL_AREA, labels = LAB_AREA) +
   scale_y_continuous(breaks = c(0, 1),
-                      labels = c("Cervid-dominated", "Boar-dominated")) +
-  labs(title = "A) Wild boar vs. cervids",
-       subtitle = "p = 0.011 (elevation)",
-       x = "Elevation (m)", y = NULL) +
-  theme_minimal(base_size = 11) +
-  theme(legend.position = "bottom")
+                     labels = c("Single prey\n(1 taxon)", "Mixed\n(>1 taxon)")) +
+  labs(title = "Mixed-prey occurrence and habitat heterogeneity",
+       subtitle = paste("Model-adjusted probabilities at mean standardised",
+                        "elevation; shaded bands are 95% confidence intervals"),
+       x = "Habitat heterogeneity (NDVI standard deviation)", y = NULL) +
+  tema_tesi + theme(legend.position = "top")
 
-# --- Pannello B: Livello 2 ---
-panelB <- ggplot() +
-  geom_ribbon(data = curva2, aes(x = ELEV_mean, ymin = lower, ymax = upper),
-              fill = "grey70", alpha = 0.4) +
-  geom_line(data = curva2, aes(x = ELEV_mean, y = p), color = "black", linewidth = 1) +
-  geom_jitter(data = df_cervidi,
-              aes(x = ELEV_mean, y = is_cervo_dominant, color = Geographic_Area),
-              width = 0, height = 0.03, size = 2.2, alpha = 0.7) +
-  scale_color_manual(values = palette_area, labels = etichette_area,
-                     name = "Geographic area") +
-  scale_y_continuous(breaks = c(0, 1),
-                      labels = c("Roe deer-dominated", "Red deer-dominated")) +
-  labs(title = "B) Red deer vs. roe deer (within cervids)",
-       subtitle = "p = 0.581 (elevation, not significant)",
-       x = "Elevation (m)", y = NULL) +
-  theme_minimal(base_size = 11) +
-  theme(legend.position = "bottom")
+ggsave("HHH_Logistic_Plot_final.png", plot_hhh, width = 10, height = 6.5, dpi = 300)
 
-# --- Figura finale ---
-figura_finale <- panelA + panelB +
-  plot_layout(guides = "collect") &
-  theme(legend.position = "bottom")
 
-print(figura_finale)
-ggsave("Grafico_Gerarchico_Cinghiale_Cervidi.png", figura_finale,
+# --- 10.2 MODELLI GERARCHICI DI PREDA DOMINANTE -------------------------------
+df_sub <- df_env %>%
+  filter(`Cervus elaphus` > 0 | `Capreolus capreolus` > 0 | `Sus scrofa` > 0) %>%
+  rowwise() %>%
+  mutate(dominante = c("Cervus elaphus", "Capreolus capreolus", "Sus scrofa")[
+      which.max(c_across(c(`Cervus elaphus`, `Capreolus capreolus`, `Sus scrofa`)))]) %>%
+  ungroup()
+
+stopifnot(nrow(df_sub) == 90)
+cat("\nPreda dominante:\n"); print(table(df_sub$dominante))
+# atteso: Capreolus 39, Cervus 39, Sus 12 (nessun pareggio)
+
+df_sub$is_boar_dominant <- as.integer(df_sub$dominante == "Sus scrofa")
+modello_livello1 <- glm(is_boar_dominant ~ ELEV_mean_z + NDVI_mean_z,
+                        data = df_sub, family = binomial(link = "logit"))
+cat("\n=== LIVELLO 1: cinghiale vs cervidi ===\n")
+print(summary(modello_livello1))
+print(exp(cbind(OR = coef(modello_livello1), confint(modello_livello1))))
+# atteso: ELEV_mean_z OR = 0.381, IC [0.161, 0.739], p = 0.0109
+
+df_cervidi <- df_sub %>% filter(dominante != "Sus scrofa")
+stopifnot(nrow(df_cervidi) == 78)
+df_cervidi$is_cervo_dominant <- as.integer(df_cervidi$dominante == "Cervus elaphus")
+modello_livello2 <- glm(is_cervo_dominant ~ ELEV_mean_z + NDVI_mean_z,
+                        data = df_cervidi, family = binomial(link = "logit"))
+cat("\n=== LIVELLO 2: cervo vs capriolo ===\n")
+print(summary(modello_livello2))
+print(exp(cbind(OR = coef(modello_livello2), confint(modello_livello2))))
+# atteso: ELEV_mean_z OR = 0.809, IC [0.376, 1.716], p = 0.581
+
+# ATTENZIONE: i modelli sono stati stimati su ELEV_mean_z calcolato sui 100
+# campioni (df_env). La griglia di previsione deve usare LE STESSE costanti di
+# centratura e scala, non la media e la deviazione standard del sottoinsieme,
+# altrimenti la curva disegnata non e' quella del modello riportato in tesi.
+ELEV_MU <- mean(df_env$ELEV_mean)
+ELEV_SD <- sd(df_env$ELEV_mean)
+
+curva_quota <- function(modello, dati) {
+  griglia <- tibble(ELEV_mean = seq(min(dati$ELEV_mean), max(dati$ELEV_mean),
+                                    length.out = 200)) %>%
+    mutate(ELEV_mean_z = (ELEV_mean - ELEV_MU) / ELEV_SD,
+           NDVI_mean_z = 0)
+  pr <- predict(modello, newdata = griglia, type = "link", se.fit = TRUE)
+  griglia %>% mutate(p  = plogis(pr$fit),
+                     lo = plogis(pr$fit - 1.96 * pr$se.fit),
+                     hi = plogis(pr$fit + 1.96 * pr$se.fit))
+}
+
+pannello_gerarchico <- function(curva, dati, risposta, titolo, sottotitolo, etichette) {
+  ggplot() +
+    geom_ribbon(data = curva, aes(x = ELEV_mean, ymin = lo, ymax = hi),
+                fill = "grey70", alpha = 0.4) +
+    geom_line(data = curva, aes(x = ELEV_mean, y = p), linewidth = 1) +
+    geom_point(data = dati,
+               aes(x = ELEV_mean, y = .data[[risposta]], colour = Geographic_Area),
+               position = position_jitter(width = 0, height = 0.03),
+               size = 2.2, alpha = 0.7) +
+    scale_colour_manual(values = COL_AREA, labels = LAB_AREA) +
+    scale_y_continuous(breaks = c(0, 1), labels = etichette) +
+    labs(title = titolo, subtitle = sottotitolo, x = "Elevation (m)", y = NULL) +
+    tema_tesi
+}
+
+fig_gerarchica <-
+  pannello_gerarchico(curva_quota(modello_livello1, df_sub), df_sub,
+                      "is_boar_dominant",
+                      "A  Wild boar vs cervids", "Elevation: p = 0.011",
+                      c("Cervid-dominated", "Boar-dominated")) +
+  pannello_gerarchico(curva_quota(modello_livello2, df_cervidi), df_cervidi,
+                      "is_cervo_dominant",
+                      "B  Red deer vs roe deer (within cervids)",
+                      "Elevation: p = 0.581",
+                      c("Roe deer-dominated", "Red deer-dominated")) +
+  plot_layout(guides = "collect") & theme(legend.position = "bottom")
+
+ggsave("Grafico_Gerarchico_Cinghiale_Cervidi_final.png", fig_gerarchica,
        width = 12, height = 6, dpi = 300)
 
-cat("\nGrafico salvato: Grafico_Gerarchico_Cinghiale_Cervidi.png\n")
 
-# ==============================================================================
-# HABITAT HETEROGENEITY HYPOTHESIS (HHH) — versione finale
-# Inglese, colonna Geographic_Area (senza spazi), palette coerente con i
-# grafici RDA e Cinghiale/Cervidi (Croazia = #C73E1D, Slovenia = #2E86AB).
-# Autosufficiente: nessuna dipendenza da script precedenti.
-# ==============================================================================
-
-library(readr)
-library(dplyr)
-library(ggplot2)
-
-# ==============================================================================
-# 1. CARICAMENTO DATI
-# ==============================================================================
-community <- read_csv2("Community_Matrix_SloCro.csv", locale = locale(decimal_mark = ","))
-ndvi      <- read_csv2("Wolf_NDVI_Dynamic_Dinaric.csv", locale = locale(decimal_mark = ","))
-
-# Nel file fornito la colonna si chiama "Popolazione".
-stopifnot(all(c("Sample_ID", "Popolazione") %in% names(community)))
-community <- community %>% rename(Geographic_Area = Popolazione)
-
-species_cols <- c("Capreolus capreolus", "Caprinae", "Cervus elaphus", "Ovis aries",
-                   "Rupicapra rupicapra", "Sus scrofa", "Bos", "Capra", "Lepus", "Ovis")
-
-community$Richness_per_sample <- rowSums(community[species_cols] > 0)
-
-df <- community %>%
-  inner_join(ndvi %>% select(Sample, ELEV_mean, NDVI_mean, NDVI_sd),
-             by = c("Sample_ID" = "Sample"))
-
-stopifnot(nrow(df) == 100)
-
-# ==============================================================================
-# 2. VARIABILE RISPOSTA BINARIA E STANDARDIZZAZIONE
-# ==============================================================================
-df$Dieta_mista <- as.integer(df$Richness_per_sample > 1)
-
-df$NDVI_sd_z   <- as.numeric(scale(df$NDVI_sd))
-df$ELEV_mean_z <- as.numeric(scale(df$ELEV_mean))
-df$Geographic_Area <- relevel(factor(df$Geographic_Area), ref = "Slovenia")
-
-# ==============================================================================
-# 3. MODELLO LOGISTICO
-# ==============================================================================
-modello_hhh <- glm(Dieta_mista ~ NDVI_sd_z + ELEV_mean_z + Geographic_Area,
-                    data = df, family = binomial(link = "logit"))
-
-print(summary(modello_hhh))
-cat("\nOdds Ratio e IC 95%:\n")
-print(exp(cbind(OR = coef(modello_hhh), confint(modello_hhh))))
-
-# ==============================================================================
-# 4. GRAFICO
-# ==============================================================================
-palette_area <- c("Croazia" = "#C73E1D", "Slovenia" = "#2E86AB")
-etichette_area <- c("Croazia" = "Croatia", "Slovenia" = "Slovenia")
-# Stessa palette usata nei grafici RDA e Cinghiale/Cervidi - coerenza tra
-# tutte e tre le figure ambientali della tesi.
-
-p <- ggplot(df, aes(x = NDVI_sd, y = Dieta_mista)) +
-  geom_jitter(aes(color = Geographic_Area), width = 0, height = 0.03, size = 2.5, alpha = 0.7) +
-  geom_smooth(method = "glm", method.args = list(family = "binomial"),
-              se = TRUE, color = "black", fill = "grey70") +
-  scale_color_manual(values = palette_area, labels = etichette_area,
-                     name = "Geographic area") +
-  scale_y_continuous(breaks = c(0, 1), labels = c("Pure\n(1 taxon)", "Mixed\n(>1 taxon)")) +
-  labs(title = "Habitat Heterogeneity Hypothesis (HHH)",
-       subtitle = "Probability of mixed diet as a function of environmental heterogeneity",
-       x = "Habitat Heterogeneity (NDVI Standard Deviation)",
-       y = NULL) +
-  theme_minimal(base_size = 12) +
-  theme(legend.position = "top")
-
-print(p)
-ggsave("HHH_Logistic_Plot_Tesi.png", plot = p, width = 10, height = 6.5, dpi = 200)
-
-cat("\nGrafico salvato: HHH_Logistic_Plot_Tesi.png\n")
-
-# ==============================================================================
-# RDA (Redundancy Analysis) — versione finale
-# Inglese, colonna Geographic_Area (senza spazi), palette coerente con i
-# grafici HHH e Cinghiale/Cervidi (Croazia = #C73E1D, Slovenia = #2E86AB).
-# Autosufficiente: nessuna dipendenza da script precedenti.
-# ==============================================================================
-
-library(readr)
-library(dplyr)
-library(vegan)
-library(ggplot2)
-library(ggrepel)
-
-# ==============================================================================
-# 1. CARICAMENTO DATI E AGGREGAZIONE SPECIE DOMESTICHE
-# ==============================================================================
-community <- read_csv2("Community_Matrix_SloCro.csv", locale = locale(decimal_mark = ","))
-ndvi      <- read_csv2("Wolf_NDVI_Dynamic_Dinaric.csv", locale = locale(decimal_mark = ","))
-
-stopifnot(all(c("Sample_ID", "Popolazione") %in% names(community)))
-community <- community %>%
-  rename(Geographic_Area = Popolazione) %>%
+# --- 10.3 REDUNDANCY ANALYSIS -------------------------------------------------
+# La RDA usa le 6 categorie aggregate (i domestici raggruppati) e i predittori
+# sulla scala originale non standardizzata, come dichiarato in tesi.
+df_rda <- df_env %>%
   mutate(Domestic = `Ovis aries` + Bos + Capra + Ovis)
 
-species_cols <- c("Cervus elaphus", "Capreolus capreolus", "Sus scrofa",
+categorie_rda <- c("Cervus elaphus", "Capreolus capreolus", "Sus scrofa",
                    "Caprinae", "Rupicapra rupicapra", "Domestic")
 
-df <- community %>%
-  inner_join(ndvi %>% select(Sample, ELEV_mean, NDVI_mean, NDVI_sd),
-             by = c("Sample_ID" = "Sample"))
+species_matrix <- df_rda %>% dplyr::select(all_of(categorie_rda)) %>% as.data.frame()
+rownames(species_matrix) <- df_rda$Sample_ID
+env <- df_rda %>% dplyr::select(ELEV_mean, NDVI_mean, NDVI_sd) %>% as.data.frame()
 
-stopifnot(nrow(df) == 100)
-
-species_matrix <- df %>% select(all_of(species_cols)) %>% as.data.frame()
-rownames(species_matrix) <- df$Sample_ID
-
-env <- df %>% select(ELEV_mean, NDVI_mean, NDVI_sd) %>% as.data.frame()
-geographic_area <- df$Geographic_Area
-
-# ==============================================================================
-# 2. TRASFORMAZIONE DI HELLINGER E RDA
-# ==============================================================================
 species_hel <- decostand(species_matrix, method = "hellinger")
-
 modello_rda <- rda(species_hel ~ ELEV_mean + NDVI_mean + NDVI_sd, data = env)
 
-print(summary(modello_rda))
-cat("\nTest globale (permutazioni):\n")
-print(anova(modello_rda, permutations = 999))
-cat("\nTest marginale per predittore:\n")
-print(anova(modello_rda, by = "margin", permutations = 999))
-cat("\nVIF:\n")
+cat("\n=== RDA ===\n"); print(summary(modello_rda))
+set.seed(123); print(anova(modello_rda, permutations = 999))
+set.seed(123); print(anova(modello_rda, by = "margin", permutations = 999))
 print(vif.cca(modello_rda))
+# atteso: R2 non aggiustato = 8.65%, RDA1 = 4.09%, RDA2 = 3.04%,
+# F(3,96) = 3.031, p = 0.002; VIF 1.014 / 3.371 / 3.368
 
-# ==============================================================================
-# 3. ESTRAZIONE SCORES
-# ==============================================================================
-site_scores <- as.data.frame(scores(modello_rda, display = "sites", scaling = 2))
-site_scores$Geographic_Area <- geographic_area
+site_scores_rda <- as.data.frame(scores(modello_rda, display = "sites", scaling = 2))
+site_scores_rda$Geographic_Area <- df_rda$Geographic_Area
 
-species_scores <- as.data.frame(scores(modello_rda, display = "species", scaling = 2))
-species_scores$Taxon <- rownames(species_scores)
+species_scores_rda <- as.data.frame(scores(modello_rda, display = "species", scaling = 2))
+species_scores_rda$Taxon <- rownames(species_scores_rda)
 
 env_scores <- as.data.frame(scores(modello_rda, display = "bp", scaling = 2))
-env_scores$Variable <- rownames(env_scores)
-env_scores$Variable <- recode(env_scores$Variable,
-                               "ELEV_mean" = "Elevation",
-                               "NDVI_mean" = "NDVI mean",
-                               "NDVI_sd"   = "NDVI sd")
+env_scores$Variable <- recode(rownames(env_scores),
+                              "ELEV_mean" = "Elevation",
+                              "NDVI_mean" = "NDVI mean",
+                              "NDVI_sd"   = "NDVI sd")
 
 var_explained <- round(100 * eigenvals(modello_rda) / sum(eigenvals(modello_rda)), 1)
-
-# ==============================================================================
-# 4. GRAFICO
-# ==============================================================================
-palette_area <- c("Croazia" = "#C73E1D", "Slovenia" = "#2E86AB")
-etichette_area <- c("Croazia" = "Croatia", "Slovenia" = "Slovenia")
 arrow_mult <- 2
 
-p <- ggplot() +
-  geom_point(data = site_scores,
-             mapping = aes(x = RDA1, y = RDA2, color = Geographic_Area),
+plot_rda <- ggplot() +
+  geom_hline(yintercept = 0, linetype = "dashed", colour = "grey70") +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "grey70") +
+  geom_point(data = site_scores_rda,
+             aes(x = RDA1, y = RDA2, colour = Geographic_Area),
              position = position_jitter(width = 0.03, height = 0.03),
              size = 2.5, alpha = 0.35) +
-  geom_segment(data = species_scores,
-               mapping = aes(x = 0, y = 0, xend = RDA1, yend = RDA2),
-               arrow = arrow(length = unit(0.2, "cm")), color = "black", linewidth = 0.5) +
-  geom_text_repel(data = species_scores,
-                   mapping = aes(x = RDA1 * 1.1, y = RDA2 * 1.1, label = Taxon),
-                   color = "black", fontface = "italic", size = 3.2,
-                   seed = 42, max.overlaps = 20) +
+  geom_segment(data = species_scores_rda,
+               aes(x = 0, y = 0, xend = RDA1, yend = RDA2),
+               arrow = arrow(length = unit(0.2, "cm")), linewidth = 0.5) +
+  geom_text_repel(data = species_scores_rda,
+                  aes(x = RDA1 * 1.1, y = RDA2 * 1.1, label = Taxon),
+                  fontface = "italic", size = 3.2, seed = 42, max.overlaps = 20) +
   geom_segment(data = env_scores,
-               mapping = aes(x = 0, y = 0, xend = RDA1 * arrow_mult, yend = RDA2 * arrow_mult),
-               arrow = arrow(length = unit(0.2, "cm")), color = "darkred", linewidth = 0.7) +
+               aes(x = 0, y = 0, xend = RDA1 * arrow_mult, yend = RDA2 * arrow_mult),
+               arrow = arrow(length = unit(0.2, "cm")),
+               colour = "darkred", linewidth = 0.7) +
   geom_text_repel(data = env_scores,
-                   mapping = aes(x = RDA1 * arrow_mult * 1.15, y = RDA2 * arrow_mult * 1.15, label = Variable),
-                   color = "darkred", fontface = "bold", size = 3.5,
-                   seed = 42, max.overlaps = 20) +
-  scale_color_manual(values = palette_area, labels = etichette_area,
-                     name = "Geographic area") +
-  geom_hline(yintercept = 0, linetype = "dashed", color = "grey70") +
-  geom_vline(xintercept = 0, linetype = "dashed", color = "grey70") +
-  labs(
-    title = "Redundancy Analysis: Dinaric Wolf Diet and Environmental Gradients",
-    subtitle = "100 fecal samples, Croatian and Slovenian geographic areas",
-    x = paste0("RDA1 (", var_explained[1], "%)"),
-    y = paste0("RDA2 (", var_explained[2], "%)")
-  ) +
-  theme_minimal(base_size = 12) +
-  theme(legend.position = "top")
+                  aes(x = RDA1 * arrow_mult * 1.15,
+                      y = RDA2 * arrow_mult * 1.15, label = Variable),
+                  colour = "darkred", fontface = "bold", size = 3.5,
+                  seed = 42, max.overlaps = 20) +
+  scale_colour_manual(values = COL_AREA, labels = LAB_AREA) +
+  labs(title = "Redundancy analysis: wolf diet and environmental gradients",
+       subtitle = "100 faecal samples, Slovenian and Croatian geographic areas",
+       x = paste0("RDA1 (", var_explained[1], "%)"),
+       y = paste0("RDA2 (", var_explained[2], "%)")) +
+  tema_tesi + theme(legend.position = "top")
 
-print(p)
-ggsave("RDA_triplot_finale.png", plot = p, width = 10, height = 8, dpi = 200)
+ggsave("RDA_triplot_final.png", plot_rda, width = 10, height = 8, dpi = 200)
 
-cat("\nGrafico salvato: RDA_triplot_finale.png\n")
+
+# ==============================================================================
+# 11. AMBIENTE DI ESECUZIONE (per la sezione Software and Reproducibility)
+# ==============================================================================
+cat("\n\n=== sessionInfo() ===\n")
+print(sessionInfo())
+# Copia da qui i numeri di versione di R, tidyverse, vegan, MASS, ggplot2 e
+# patchwork e inseriscili nella Sezione 2.12 della tesi.
