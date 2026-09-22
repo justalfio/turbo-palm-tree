@@ -939,7 +939,7 @@ stopifnot(!any(is.na(df_reg$Regione)))
 riepilogo_regioni <- df_reg %>%
   group_by(Regione) %>%
   summarise(n = n(),
-            individui      = n_distinct(Individual),
+            individui      = n_distinct(Individual, na.rm = TRUE),  # MSV164 e HRV018 senza genotipo
             quota_media    = round(mean(ELEV_mean)),
             NDVI_sd_medio  = round(mean(NDVI_sd), 3),
             campioni_misti = sum(ricchezza > 1),
