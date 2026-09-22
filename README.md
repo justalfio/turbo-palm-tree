@@ -3,7 +3,7 @@
 # IN SLOVENIA AND CROATIA - SCRIPT UNICO DI ANALISI
 #
 # Alfio Tomarchio - Universita' di Bologna
-# Ultima revisione: 19 settembre 2026
+# Ultima revisione: 22 settembre 2026
 #
 # COSA E' CAMBIATO RISPETTO ALLA VERSIONE PRECEDENTE (elenco completo)
 #
@@ -48,6 +48,10 @@
 #     sostituito lo script si ferma invece di produrre numeri diversi in
 #     silenzio.
 # 13. sessionInfo() in coda, per la sezione Software and Reproducibility.
+# 14. (22/09/2026) Nuova sezione 11: analisi esplorativa per regione dentro la
+#     Croazia, per la Discussion (Sezione 4.2). Su indicazione della relatrice
+#     l'attribuzione ai cluster genetici e il confronto fra regioni stanno nella
+#     Discussion; lo script li rende riproducibili.
 #
 # NOTA SULLA SOGLIA DELL'1%: i due file FILE DEFINITIVO hanno gia' la soglia
 # applicata a monte. Lo script lo verifica invece di darlo per scontato.
@@ -74,6 +78,7 @@ FILE_CRO       <- "Croatian wolves FILE DEFINITIVO.csv"
 FILE_AMBIENTE  <- "Wolf_NDVI_Dynamic_Dinaric.csv"
 OUT_FOO_RRA    <- "FOO_RRA_Slovenia_and_Croatia.csv"
 OUT_COMMUNITY  <- "Community_Matrix_SloCro.csv"
+FILE_INDIVIDUI <- "individui_e_branchi_100_campioni.csv"  # solo per la sezione 11
 
 # --- palette unica per tutte le figure della tesi -----------------------------
 # Slovenia #1F7FB5, Croazia #C73E1D. Controllate: banda di luminosita',
@@ -891,7 +896,84 @@ ggsave("RDA_triplot_final.png", plot_rda, width = 10, height = 8, dpi = 200)
 
 
 # ==============================================================================
-# 11. AMBIENTE DI ESECUZIONE (per la sezione Software and Reproducibility)
+# 11. ANALISI ESPLORATIVA PER REGIONE (Discussion, Sezione 4.2)
+# Su indicazione della relatrice (22/09/2026) l'attribuzione dei campioni ai
+# cluster genetici di Snjegota et al. (2021) e il confronto fra regioni sono
+# trattati nella Discussion. Le regioni croate sono attribuite dalle coordinate
+# dei campioni, seguendo i raggruppamenti delle mappe del report di laboratorio.
+# Le liste sono scritte per esteso, cosi' l'attribuzione e' verificabile campione
+# per campione.
+# ==============================================================================
+
+regioni_croazia <- list(
+  "Zumberak"     = c("HRV005", "HRV00C", "HRV00E", "HRV00J", "HRV00K", "HRV012",
+                     "HRV014", "HRV016", "HRV017", "HRV01K", "HRV02P", "HRV02U"),
+  "Gorski kotar" = c("HRV003", "HRV004", "HRV011", "HRV015", "HRV018", "HRV01C",
+                     "HRV01E", "HRV01F", "HRV01H", "HRV01J", "HRV01X", "HRV020",
+                     "HRV021", "HRV022", "HRV025", "HRV026", "HRV028", "HRV02A",
+                     "HRV02K", "HRV060", "HRV061", "HRV062"),
+  "Lika N"       = c("HRV01U", "HRV02E", "HRV02H", "HRV032", "HRV033", "HRV05A",
+                     "HRV05C", "HRV05E", "HRV05F", "HRV05H", "HRV05J", "HRV05U"),
+  "Lika S"       = c("HRV007", "HRV008", "HRV02J"),   # Lika meridionale, zona di Gracac
+  "Dalmatia"     = c("HRV05X"),                       # area del cluster 2
+  "HRV027"       = c("HRV027")                        # non attribuibile
+)
+
+tab_regioni <- tibble(Sample_ID = unlist(regioni_croazia, use.names = FALSE),
+                      Regione   = rep(names(regioni_croazia),
+                                      lengths(regioni_croazia)))
+stopifnot(nrow(tab_regioni) == 51, !anyDuplicated(tab_regioni$Sample_ID))
+
+individui <- read_csv(FILE_INDIVIDUI, show_col_types = FALSE) %>%
+  dplyr::select(Sample, Individual)
+
+df_reg <- df_env %>%
+  left_join(tab_regioni, by = "Sample_ID") %>%
+  mutate(Regione = if_else(Geographic_Area == "Slovenia", "Slovenia", Regione)) %>%
+  left_join(individui, by = c("Sample_ID" = "Sample")) %>%
+  rowwise() %>%
+  mutate(Preda_dominante = ordine_taxa[which.max(c_across(all_of(ordine_taxa)))]) %>%
+  ungroup()
+stopifnot(!any(is.na(df_reg$Regione)))
+
+riepilogo_regioni <- df_reg %>%
+  group_by(Regione) %>%
+  summarise(n = n(),
+            individui      = n_distinct(Individual),
+            quota_media    = round(mean(ELEV_mean)),
+            NDVI_sd_medio  = round(mean(NDVI_sd), 3),
+            campioni_misti = sum(ricchezza > 1),
+            .groups = "drop")
+cat("\n=== Riepilogo per regione ===\n"); print(riepilogo_regioni)
+# atteso: Slovenia 49 campioni, 21 individui, 1047 m, 0.083, 13 misti
+#         Gorski kotar 22, 13, 850 m, 0.050, 1 misto
+#         Lika N 12, 8, 926 m, 0.056, 3 misti; Lika S 3, 3, 704 m, 0.141, 1 misto
+#         Zumberak 12, 3, 740 m, 0.048, 0 misti
+
+cat("\n=== Preda dominante per regione ===\n")
+print(table(df_reg$Regione, df_reg$Preda_dominante))
+# atteso: Gorski kotar 21 cervo su 22; Zumberak 11 capriolo su 12 (+1 Ovis);
+#         Lika N 8 cinghiale su 12; Lika S 2 Caprinae + 1 Capra
+
+# PERMANOVA esplorativa fra le tre regioni croate principali (n = 46)
+sel_reg  <- df_reg$Regione %in% c("Zumberak", "Gorski kotar", "Lika N")
+dati_reg <- df_reg[sel_reg, ]
+mat_reg  <- dati_reg %>% dplyr::select(all_of(ordine_taxa)) %>% as.data.frame()
+dist_reg <- vegdist(decostand(mat_reg, method = "hellinger"), method = "bray")
+
+set.seed(123)
+permanova_regioni <- adonis2(dist_reg ~ Regione, data = dati_reg,
+                             permutations = 9999)
+cat("\n=== PERMANOVA fra regioni croate (esplorativa) ===\n")
+print(permanova_regioni)
+# atteso: R2 = 0.672, F = 44.0; p <= 0.0002 (il valore esatto dipende dalle
+# permutazioni: riporta in tesi quello stampato qui).
+# ATTENZIONE: i 12 campioni dello Zumberak vengono da 3 individui. L'R2 e'
+# gonfiato dalla non indipendenza e va presentato come descrittivo.
+
+
+# ==============================================================================
+# 12. AMBIENTE DI ESECUZIONE (per la sezione Software and Reproducibility)
 # ==============================================================================
 cat("\n\n=== sessionInfo() ===\n")
 print(sessionInfo())
