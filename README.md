@@ -60,6 +60,11 @@
 #     totale 103. Corretta anche la cella MSV12L (3850 -> 3580, trasposizione).
 #     Le numerosita' attese sono ora in N_SLO / N_CRO / N_TOT; i valori "atteso"
 #     che dipendono dai modelli ambientali vanno riletti dopo il rilancio.
+# 16. (23/09/2026) Nuovo file ambientale Wolf_NDVI_Dynamic_Dinaric.csv con 103
+#     righe, tutte ricalcolate con GEE_NDVI_quota_103_campioni.js (stesso
+#     metodo per tutti i campioni). ELEV_mean = media nel buffer di 2 km (i
+#     vecchi valori coincidono entro 1 m). I sottotitoli della figura
+#     gerarchica leggono ora il p dal modello invece di un numero scritto a mano.
 #
 # NOTA SULLA SOGLIA DELL'1%: i due file FILE DEFINITIVO hanno gia' la soglia
 # applicata a monte. Lo script lo verifica invece di darlo per scontato.
@@ -713,12 +718,14 @@ cat("\n=== HHH ===\n"); print(summary(modello_hhh))
 cat("\nOdds ratio e IC 95% da profilo di verosimiglianza (richiede MASS):\n")
 print(exp(cbind(OR = coef(modello_hhh), confint(modello_hhh))))
 # valori del 22/09 su 100 campioni, da rileggere: NDVI_sd_z OR = 2.860, IC [1.641, 5.448], p = 0.00049
+# anteprima Python 23/09, 103 campioni e NDVI nuovi: NDVI_sd_z OR = 2.487, p = 0.0010 (da confermare in R)
 
 # Test del rapporto di verosimiglianza sull'interazione (riportato in tesi)
 modello_hhh_int <- update(modello_hhh, . ~ . + NDVI_sd_z:Geographic_Area)
 cat("\nTest dell'interazione NDVI_sd x area:\n")
 print(anova(modello_hhh, modello_hhh_int, test = "LRT"))
 # valori del 22/09 su 100 campioni, da rileggere: chi2(1) = 0.184, p = 0.668
+# anteprima Python 23/09, 103 campioni e NDVI nuovi: chi2(1) = 0.008, p = 0.930
 
 # Curve predette DAL MODELLO RIPORTATO IN TESI, per area, a quota media.
 # (La versione precedente usava geom_smooth(), che rifitta un modello
@@ -780,6 +787,7 @@ cat("\n=== LIVELLO 1: cinghiale vs cervidi ===\n")
 print(summary(modello_livello1))
 print(exp(cbind(OR = coef(modello_livello1), confint(modello_livello1))))
 # valori del 22/09 su 100 campioni, da rileggere: ELEV_mean_z OR = 0.381, IC [0.161, 0.739], p = 0.0109
+# anteprima Python 23/09, 103 campioni e NDVI nuovi: ELEV_mean_z OR = 0.369, p = 0.0085
 
 df_cervidi <- df_sub %>% filter(dominante != "Sus scrofa")
 stopifnot(nrow(df_cervidi) == 81)
@@ -790,6 +798,7 @@ cat("\n=== LIVELLO 2: cervo vs capriolo ===\n")
 print(summary(modello_livello2))
 print(exp(cbind(OR = coef(modello_livello2), confint(modello_livello2))))
 # valori del 22/09 su 100 campioni, da rileggere: ELEV_mean_z OR = 0.809, IC [0.376, 1.716], p = 0.581
+# anteprima Python 23/09, 103 campioni e NDVI nuovi: ELEV_mean_z OR = 0.579, p = 0.144
 
 # ATTENZIONE: i modelli sono stati stimati su ELEV_mean_z calcolato sui 103
 # campioni (df_env). La griglia di previsione deve usare LE STESSE costanti di
@@ -824,15 +833,21 @@ pannello_gerarchico <- function(curva, dati, risposta, titolo, sottotitolo, etic
     tema_tesi
 }
 
+# p della quota letti dai modelli, cosi' il sottotitolo non resta indietro
+p_quota <- function(modello) {
+  p <- summary(modello)$coefficients["ELEV_mean_z", "Pr(>|z|)"]
+  paste0("Elevation: p = ", formatC(p, digits = 2, format = "g"))
+}
+
 fig_gerarchica <-
   pannello_gerarchico(curva_quota(modello_livello1, df_sub), df_sub,
                       "is_boar_dominant",
-                      "A  Wild boar vs cervids", "Elevation: p = 0.011",
+                      "A  Wild boar vs cervids", p_quota(modello_livello1),
                       c("Cervid-dominated", "Boar-dominated")) +
   pannello_gerarchico(curva_quota(modello_livello2, df_cervidi), df_cervidi,
                       "is_cervo_dominant",
                       "B  Red deer vs roe deer (within cervids)",
-                      "Elevation: p = 0.581",
+                      p_quota(modello_livello2),
                       c("Roe deer-dominated", "Red deer-dominated")) +
   plot_layout(guides = "collect") & theme(legend.position = "bottom")
 
@@ -862,6 +877,9 @@ set.seed(123); print(anova(modello_rda, by = "margin", permutations = 999))
 print(vif.cca(modello_rda))
 # valori del 22/09 su 100 campioni, da rileggere: R2 non aggiustato = 8.65%, RDA1 = 4.09%, RDA2 = 3.04%,
 # F(3,96) = 3.031, p = 0.002; VIF 1.014 / 3.371 / 3.368
+# anteprima Python 23/09, 103 campioni e NDVI nuovi: R2 = 7.79%, RDA1 = 3.79%, RDA2 = 2.49%,
+# F(3,99) = 2.790; VIF 1.024 / 3.839 / 3.793; margini: quota p ~0.02, NDVI_mean p ~0.05,
+# NDVI_sd p ~0.05 (p per permutazione: il valore esatto lo da' R)
 
 site_scores_rda <- as.data.frame(scores(modello_rda, display = "sites", scaling = 2))
 site_scores_rda$Geographic_Area <- df_rda$Geographic_Area
