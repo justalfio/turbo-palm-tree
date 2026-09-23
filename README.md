@@ -3,7 +3,7 @@
 # IN SLOVENIA AND CROATIA - SCRIPT UNICO DI ANALISI
 #
 # Alfio Tomarchio - Universita' di Bologna
-# Ultima revisione: 22 settembre 2026
+# Ultima revisione: 23 settembre 2026
 #
 # COSA E' CAMBIATO RISPETTO ALLA VERSIONE PRECEDENTE (elenco completo)
 #
@@ -52,6 +52,14 @@
 #     Croazia, per la Discussion (Sezione 4.2). Su indicazione della relatrice
 #     l'attribuzione ai cluster genetici e il confronto fra regioni stanno nella
 #     Discussion; lo script li rende riproducibili.
+# 15. (23/09/2026) Recuperati 3 campioni sloveni (MSV134, MSV15H, MSV15M): nel
+#     foglio "Merged scientific_name" del composition report le loro reads di
+#     capriolo erano state azzerate, mentre nella tabella dei MOTU (READ COUNT)
+#     e nella matrice LECA 2022 superano la soglia di 2.000 reads. Rispettano
+#     tutte le regole di inclusione della tesi, quindi rientrano: Slovenia 52,
+#     totale 103. Corretta anche la cella MSV12L (3850 -> 3580, trasposizione).
+#     Le numerosita' attese sono ora in N_SLO / N_CRO / N_TOT; i valori "atteso"
+#     che dipendono dai modelli ambientali vanno riletti dopo il rilancio.
 #
 # NOTA SULLA SOGLIA DELL'1%: i due file FILE DEFINITIVO hanno gia' la soglia
 # applicata a monte. Lo script lo verifica invece di darlo per scontato.
@@ -78,7 +86,12 @@ FILE_CRO       <- "Croatian wolves FILE DEFINITIVO.csv"
 FILE_AMBIENTE  <- "Wolf_NDVI_Dynamic_Dinaric.csv"
 OUT_FOO_RRA    <- "FOO_RRA_Slovenia_and_Croatia.csv"
 OUT_COMMUNITY  <- "Community_Matrix_SloCro.csv"
-FILE_INDIVIDUI <- "individui_e_branchi_100_campioni.csv"  # solo per la sezione 11
+FILE_INDIVIDUI <- "individui_e_branchi_103_campioni.csv"  # solo per la sezione 11
+
+# --- numerosita' attese (23/09/2026: +3 campioni sloveni recuperati) ----------
+N_SLO <- 52
+N_CRO <- 51
+N_TOT <- N_SLO + N_CRO     # 103
 
 # --- palette unica per tutte le figure della tesi -----------------------------
 # Slovenia #1F7FB5, Croazia #C73E1D. Controllate: banda di luminosita',
@@ -132,10 +145,10 @@ cro_long <- cro %>%
 
 grezzi <- bind_rows(slo_long, cro_long)
 
-# Controlli: 100 campioni, 49 + 51
-stopifnot(n_distinct(grezzi$Sample_ID) == 100)
-stopifnot(n_distinct(grezzi$Sample_ID[grezzi$Popolazione == "Slovenia"]) == 49)
-stopifnot(n_distinct(grezzi$Sample_ID[grezzi$Popolazione == "Croazia"])  == 51)
+# Controlli: 103 campioni, 52 + 51
+stopifnot(n_distinct(grezzi$Sample_ID) == N_TOT)
+stopifnot(n_distinct(grezzi$Sample_ID[grezzi$Popolazione == "Slovenia"]) == N_SLO)
+stopifnot(n_distinct(grezzi$Sample_ID[grezzi$Popolazione == "Croazia"])  == N_CRO)
 
 grezzi <- grezzi %>%
   group_by(Sample_ID) %>%
@@ -344,7 +357,7 @@ community_matrix <- grezzi %>%
               values_fill = 0) %>%
   dplyr::select(Sample_ID, Popolazione, all_of(ordine_taxa))
 
-stopifnot(nrow(community_matrix) == 100)
+stopifnot(nrow(community_matrix) == N_TOT)
 write.csv2(community_matrix, OUT_COMMUNITY, row.names = FALSE)
 cat("\nCommunity matrix:", nrow(community_matrix), "campioni,",
     length(ordine_taxa), "taxa\n")
@@ -377,8 +390,8 @@ cat("\nMediana e intervallo dei reads per campione:\n")
 print(per_campione %>% group_by(Popolazione) %>%
         summarise(mediana = median(reads), minimo = min(reads),
                   massimo = max(reads), .groups = "drop"))
-# Atteso: 81 campioni su 100 con un solo taxon (36 Slovenia, 45 Croazia);
-# mediana 8,647 reads in Slovenia (2,110-110,813) e 58,579 in Croazia
+# Atteso: 83 campioni su 103 con un solo taxon (38 Slovenia, 45 Croazia);
+# mediana 8,931 reads in Slovenia (2,110-110,813) e 58,579 in Croazia
 # (3,895-189,136).
 
 barre_percentuali <- function(dati, colonna, titolo) {
@@ -405,8 +418,8 @@ fig_output <-
   plot_layout(guides = "collect") +
   plot_annotation(
     title = "Metabarcoding output of the analytical dataset",
-    subtitle = paste("Percentages of the 49 Slovenian and 51 Croatian samples",
-                     "retained after filtering"),
+    subtitle = paste0("Percentages of the ", N_SLO, " Slovenian and ", N_CRO,
+                      " Croatian samples retained after filtering"),
     theme = theme(plot.title = element_text(face = "bold", size = 14))
   ) &
   theme(legend.position = "bottom")
@@ -432,12 +445,12 @@ levins_finale <- rra_matrice %>%
          B_A = (B - 1) / (n_categorie - 1)) %>%
   ungroup() %>%
   dplyr::select(Popolazione, B_A)
-print(levins_finale)      # atteso: Slovenia 0.193, Croazia 0.268
+print(levins_finale)      # atteso: Slovenia 0.184, Croazia 0.268
 
 p_slo <- as.numeric(rra_matrice[rra_matrice$Popolazione == "Slovenia", -1]) / 100
 p_cro <- as.numeric(rra_matrice[rra_matrice$Popolazione == "Croazia",  -1]) / 100
 pianka_finale <- sum(p_slo * p_cro) / sqrt(sum(p_slo^2) * sum(p_cro^2))
-cat("\nIndice di Pianka:", round(pianka_finale, 3), "\n")   # atteso 0.930
+cat("\nIndice di Pianka:", round(pianka_finale, 3), "\n")   # atteso 0.915
 
 
 # ==============================================================================
@@ -459,7 +472,8 @@ set.seed(123)
 permanova_risultato <- adonis2(dist_matrix ~ Popolazione, data = metadati,
                                permutations = 9999, by = "terms")
 cat("\n=== PERMANOVA ===\n"); print(permanova_risultato)
-# atteso: R2 = 0.02349, F = 2.357, p = 0.0731
+# atteso: R2 = 0.0281, F = 2.92; il p va letto qui (una stima con 9999
+# permutazioni in Python da' circa 0.04)
 
 # --- BETADISPER (in inglese) --------------------------------------------------
 # Le etichette dei centroidi nel grafico di betadisper sono i livelli del
@@ -472,7 +486,8 @@ set.seed(123)
 cat("\n=== BETADISPER ===\n")
 print(permutest(dispersion_mod, permutations = 999))
 print(dispersion_mod$group.distances)
-# atteso: F = 3.744, p = 0.063; distanze medie 0.486 Slovenia, 0.571 Croazia.
+# valori da leggere qui (quelli del 22/09, su 100 campioni, erano F = 3.744,
+# p = 0.063; distanze medie 0.486 Slovenia, 0.571 Croazia).
 # Nota: vegan avvisa che alcune distanze al quadrato sono negative e le porta a
 # zero. E' il motivo per cui questi valori non si riproducono con un calcolo
 # fatto a mano che tratti diversamente gli autovalori negativi della matrice di
@@ -544,7 +559,7 @@ var_asse1 <- round(100 * pcoa_result$eig[1] / sum(eig_positivi), 2)
 var_asse2 <- round(100 * pcoa_result$eig[2] / sum(eig_positivi), 2)
 cat("\nPCoA - varianza spiegata: asse 1 =", var_asse1,
     "%, asse 2 =", var_asse2, "%\n")
-stopifnot(abs(var_asse1 - 52.70) < 0.01, abs(var_asse2 - 26.72) < 0.01)
+stopifnot(abs(var_asse1 - 53.35) < 0.01, abs(var_asse2 - 26.40) < 0.01)
 
 site_scores <- as.data.frame(pcoa_result$points)
 colnames(site_scores) <- c("PCoA1", "PCoA2")
@@ -567,8 +582,8 @@ cat("Posizioni distinte nel piano dei primi due assi:",
     nrow(distinct(site_points, x, y)), "\n")
 cat("Campioni per posizione (prime righe):\n")
 print(site_points %>% arrange(desc(n_campioni)) %>% head(8))
-# atteso: 25 profili distinti ma 24 posizioni distinte nel piano; 35 campioni
-# sulla posizione "solo Cervus elaphus" e 33 su "solo Capreolus capreolus"
+# atteso: 26 profili distinti ma 25 posizioni distinte nel piano; 35 campioni
+# sulla posizione "solo Cervus elaphus" e 35 su "solo Capreolus capreolus"
 # sommando le due aree
 
 species_scores <- as.data.frame(
@@ -636,7 +651,7 @@ riepilogo_tipi <- expand_grid(Popolazione = c("Slovenia", "Croazia"),
          Popolazione = factor(Popolazione, levels = c("Slovenia", "Croazia")))
 
 print(riepilogo_tipi, n = Inf)
-# atteso: Cervus only 15 SLO / 20 CRO; Capreolus only 18 / 15; misti 13 / 6;
+# atteso: Cervus only 15 SLO / 20 CRO; Capreolus only 20 / 15; misti 14 / 6;
 # Sus only 1 / 7; Caprinae only 2 / 1; domestici 0 / 2
 
 etichette_tipi <- function(x) {
@@ -657,7 +672,7 @@ plot_tipi <- ggplot(riepilogo_tipi, aes(x = pct, y = tipo, fill = Popolazione)) 
   scale_y_discrete(labels = etichette_tipi) +
   scale_x_continuous(limits = c(0, 48), expand = c(0, 0)) +
   labs(title = "Distribution of samples by diet type",
-       subtitle = "81 of 100 samples contained a single prey taxon",
+       subtitle = "83 of 103 samples contained a single prey taxon",
        x = "Percentage of samples in the geographic area (%)", y = NULL) +
   tema_tesi + theme(legend.position = "bottom")
 
@@ -675,7 +690,7 @@ df_env <- df_mv %>%
   inner_join(ambiente %>% dplyr::select(Sample, ELEV_mean, NDVI_mean, NDVI_sd),
              by = c("Sample_ID" = "Sample")) %>%
   rename(Geographic_Area = Popolazione)
-stopifnot(nrow(df_env) == 100)
+stopifnot(nrow(df_env) == N_TOT)   # se si ferma qui, mancano i 3 campioni nel file ambientale
 
 df_env <- df_env %>%
   mutate(ELEV_mean_z = as.numeric(scale(ELEV_mean)),
@@ -687,7 +702,7 @@ df_env <- df_env %>%
 
 cat("\nCampioni a preda singola / misti:",
     sum(df_env$Dieta_mista == 0), "/", sum(df_env$Dieta_mista == 1), "\n")
-stopifnot(sum(df_env$Dieta_mista) == 19)
+stopifnot(sum(df_env$Dieta_mista) == 20)
 
 
 # --- 10.1 HABITAT HETEROGENEITY HYPOTHESIS ------------------------------------
@@ -697,13 +712,13 @@ modello_hhh <- glm(Dieta_mista ~ NDVI_sd_z + ELEV_mean_z + Geographic_Area,
 cat("\n=== HHH ===\n"); print(summary(modello_hhh))
 cat("\nOdds ratio e IC 95% da profilo di verosimiglianza (richiede MASS):\n")
 print(exp(cbind(OR = coef(modello_hhh), confint(modello_hhh))))
-# atteso: NDVI_sd_z OR = 2.860, IC [1.641, 5.448], p = 0.00049
+# valori del 22/09 su 100 campioni, da rileggere: NDVI_sd_z OR = 2.860, IC [1.641, 5.448], p = 0.00049
 
 # Test del rapporto di verosimiglianza sull'interazione (riportato in tesi)
 modello_hhh_int <- update(modello_hhh, . ~ . + NDVI_sd_z:Geographic_Area)
 cat("\nTest dell'interazione NDVI_sd x area:\n")
 print(anova(modello_hhh, modello_hhh_int, test = "LRT"))
-# atteso: chi2(1) = 0.184, p = 0.668
+# valori del 22/09 su 100 campioni, da rileggere: chi2(1) = 0.184, p = 0.668
 
 # Curve predette DAL MODELLO RIPORTATO IN TESI, per area, a quota media.
 # (La versione precedente usava geom_smooth(), che rifitta un modello
@@ -754,9 +769,9 @@ df_sub <- df_env %>%
       which.max(c_across(c(`Cervus elaphus`, `Capreolus capreolus`, `Sus scrofa`)))]) %>%
   ungroup()
 
-stopifnot(nrow(df_sub) == 90)
+stopifnot(nrow(df_sub) == 93)
 cat("\nPreda dominante:\n"); print(table(df_sub$dominante))
-# atteso: Capreolus 39, Cervus 39, Sus 12 (nessun pareggio)
+# atteso: Capreolus 42, Cervus 39, Sus 12 (nessun pareggio)
 
 df_sub$is_boar_dominant <- as.integer(df_sub$dominante == "Sus scrofa")
 modello_livello1 <- glm(is_boar_dominant ~ ELEV_mean_z + NDVI_mean_z,
@@ -764,19 +779,19 @@ modello_livello1 <- glm(is_boar_dominant ~ ELEV_mean_z + NDVI_mean_z,
 cat("\n=== LIVELLO 1: cinghiale vs cervidi ===\n")
 print(summary(modello_livello1))
 print(exp(cbind(OR = coef(modello_livello1), confint(modello_livello1))))
-# atteso: ELEV_mean_z OR = 0.381, IC [0.161, 0.739], p = 0.0109
+# valori del 22/09 su 100 campioni, da rileggere: ELEV_mean_z OR = 0.381, IC [0.161, 0.739], p = 0.0109
 
 df_cervidi <- df_sub %>% filter(dominante != "Sus scrofa")
-stopifnot(nrow(df_cervidi) == 78)
+stopifnot(nrow(df_cervidi) == 81)
 df_cervidi$is_cervo_dominant <- as.integer(df_cervidi$dominante == "Cervus elaphus")
 modello_livello2 <- glm(is_cervo_dominant ~ ELEV_mean_z + NDVI_mean_z,
                         data = df_cervidi, family = binomial(link = "logit"))
 cat("\n=== LIVELLO 2: cervo vs capriolo ===\n")
 print(summary(modello_livello2))
 print(exp(cbind(OR = coef(modello_livello2), confint(modello_livello2))))
-# atteso: ELEV_mean_z OR = 0.809, IC [0.376, 1.716], p = 0.581
+# valori del 22/09 su 100 campioni, da rileggere: ELEV_mean_z OR = 0.809, IC [0.376, 1.716], p = 0.581
 
-# ATTENZIONE: i modelli sono stati stimati su ELEV_mean_z calcolato sui 100
+# ATTENZIONE: i modelli sono stati stimati su ELEV_mean_z calcolato sui 103
 # campioni (df_env). La griglia di previsione deve usare LE STESSE costanti di
 # centratura e scala, non la media e la deviazione standard del sottoinsieme,
 # altrimenti la curva disegnata non e' quella del modello riportato in tesi.
@@ -845,7 +860,7 @@ cat("\n=== RDA ===\n"); print(summary(modello_rda))
 set.seed(123); print(anova(modello_rda, permutations = 999))
 set.seed(123); print(anova(modello_rda, by = "margin", permutations = 999))
 print(vif.cca(modello_rda))
-# atteso: R2 non aggiustato = 8.65%, RDA1 = 4.09%, RDA2 = 3.04%,
+# valori del 22/09 su 100 campioni, da rileggere: R2 non aggiustato = 8.65%, RDA1 = 4.09%, RDA2 = 3.04%,
 # F(3,96) = 3.031, p = 0.002; VIF 1.014 / 3.371 / 3.368
 
 site_scores_rda <- as.data.frame(scores(modello_rda, display = "sites", scaling = 2))
@@ -887,7 +902,7 @@ plot_rda <- ggplot() +
                   seed = 42, max.overlaps = 20) +
   scale_colour_manual(values = COL_AREA, labels = LAB_AREA) +
   labs(title = "Redundancy analysis: wolf diet and environmental gradients",
-       subtitle = "100 faecal samples, Slovenian and Croatian geographic areas",
+       subtitle = paste(N_TOT, "faecal samples, Slovenian and Croatian geographic areas"),
        x = paste0("RDA1 (", var_explained[1], "%)"),
        y = paste0("RDA2 (", var_explained[2], "%)")) +
   tema_tesi + theme(legend.position = "top")
@@ -945,7 +960,8 @@ riepilogo_regioni <- df_reg %>%
             campioni_misti = sum(ricchezza > 1),
             .groups = "drop")
 cat("\n=== Riepilogo per regione ===\n"); print(riepilogo_regioni)
-# atteso: Slovenia 49 campioni, 21 individui, 1047 m, 0.083, 13 misti
+# atteso: Slovenia 52 campioni, 22 individui, 14 misti (quota e NDVI_sd da
+#         rileggere: cambiano con i 3 campioni recuperati)
 #         Gorski kotar 22, 13, 850 m, 0.050, 1 misto
 #         Lika N 12, 8, 926 m, 0.056, 3 misti; Lika S 3, 3, 704 m, 0.141, 1 misto
 #         Zumberak 12, 3, 740 m, 0.048, 0 misti
@@ -966,8 +982,8 @@ permanova_regioni <- adonis2(dist_reg ~ Regione, data = dati_reg,
                              permutations = 9999)
 cat("\n=== PERMANOVA fra regioni croate (esplorativa) ===\n")
 print(permanova_regioni)
-# atteso: R2 = 0.672, F = 44.0; p <= 0.0002 (il valore esatto dipende dalle
-# permutazioni: riporta in tesi quello stampato qui).
+# ottenuto (22/09/2026): R2 = 0.67182, F(2,43) = 44.014, p = 1e-04, cioe' il
+# minimo ottenibile con 9999 permutazioni (1/10000).
 # ATTENZIONE: i 12 campioni dello Zumberak vengono da 3 individui. L'R2 e'
 # gonfiato dalla non indipendenza e va presentato come descrittivo.
 
