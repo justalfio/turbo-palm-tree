@@ -70,6 +70,8 @@
 #     singoli campioni); torte del taxonomic coverage per famiglia (dati grezzi);
 #     tabella delle covariate per area; figura NDVI dei tre buffer di esempio
 #     (facoltativa: serve terra + sf). La sessionInfo diventa la sezione 18.
+#     In RStudio i grafici compaiono nel pannello Plots e le tabelle principali
+#     nel visualizzatore dati (funzioni mostra() e mostra_tabella()).
 #
 # NOTA SULLA SOGLIA DELL'1%: i due file FILE DEFINITIVO hanno gia' la soglia
 # applicata a monte. Lo script lo verifica invece di darlo per scontato.
@@ -126,6 +128,19 @@ etichette_taxa_plotmath <- function(x) {
   parse(text = ifelse(x == "Caprinae",
                       "plain('Caprinae')",
                       sprintf("italic('%s')", x)))
+}
+
+# --- visualizzazione durante l'esecuzione -------------------------------------
+# In RStudio ogni grafico compare nel pannello Plots (freccette per sfogliarli)
+# e le tabelle principali si aprono in una scheda del visualizzatore dati.
+# Lanciato con Rscript (non interattivo) lo script salva soltanto i file.
+mostra <- function(grafico) {
+  if (interactive()) print(grafico)
+  invisible(grafico)
+}
+mostra_tabella <- function(tabella, titolo) {
+  if (interactive()) utils::View(tabella, title = titolo)
+  invisible(tabella)
 }
 
 tema_tesi <- theme_minimal(base_size = 12) +
@@ -223,11 +238,12 @@ foo_rra_finale <- presenza_pop %>%
   arrange(Popolazione, desc(RRA_percentuale))
 
 print(foo_rra_finale, n = Inf)
+mostra_tabella(foo_rra_finale, "FOO e RRA per area")
 write.csv2(foo_rra_finale, OUT_FOO_RRA, row.names = FALSE)
 
 # Valori attesi in tesi (Tabella 3.2):
 #   Slovenia (52): Capreolus 57.69 / 48.48 - Cervus 48.08 / 36.29 - Caprinae 9.62 / 8.87
-#   Croazia : Cervus 41.18 / 40.39 - Capreolus 31.37 / 30.20 - Sus 19.61 / 18.84
+#   Croazia (51, invariata): Cervus 41.18 / 40.39 - Capreolus 31.37 / 30.20 - Sus 19.61 / 18.84
 
 
 # ==============================================================================
@@ -266,27 +282,31 @@ crea_grafico_nazione <- function(dati, nazione) {
     pivot_longer(cols = c(FOO_percentuale, RRA_percentuale),
                  names_to = "Metrica", values_to = "Valore") %>%
     mutate(Metrica = recode(Metrica,
-             "FOO_percentuale" = "Frequency of Occurrence",
-             "RRA_percentuale" = "Relative Read Abundance"))
+             "FOO_percentuale" = "A  Frequency of occurrence",
+             "RRA_percentuale" = "B  Relative read abundance"))
   df_long$Metrica <- factor(df_long$Metrica,
-    levels = c("Frequency of Occurrence", "Relative Read Abundance"))
+    levels = c("A  Frequency of occurrence", "B  Relative read abundance"))
 
   ggplot(df_long, aes(x = Valore, y = Preda, fill = Categoria)) +
     geom_col(width = 0.8) +
-    geom_text(aes(label = round(Valore, 1)), hjust = -0.2, size = 3.5) +
+    geom_text(aes(label = sprintf("%.1f", Valore)), hjust = -0.2, size = 3.5) +
     facet_wrap(~ Metrica, scales = "free_x") +
     scale_fill_manual(values = COL_CATEGORIA) +
     scale_y_discrete(labels = etichette_taxa_plotmath) +
     scale_x_continuous(limits = c(0, max(df_long$Valore) * 1.15),
                        expand = c(0, 0)) +
     labs(title = paste("Diet composition:", LAB_AREA[[nazione]]),
+         subtitle = paste0("n = ", n_distinct(grezzi$Sample_ID[grezzi$Popolazione == nazione]),
+                           " samples; Caprinae is not attributed to wild or domestic taxa"),
          x = "Percentage (%)", y = NULL, fill = NULL) +
     theme_bw() +
     theme(
       axis.text.y = element_text(size = 12, colour = "black"),
       axis.text.x = element_text(size = 11, colour = "black"),
       plot.title = element_text(face = "bold", size = 14, hjust = 0.5,
-                                margin = margin(b = 15)),
+                                margin = margin(b = 4)),
+      plot.subtitle = element_text(colour = "grey35", hjust = 0.5,
+                                   margin = margin(b = 12)),
       strip.text = element_text(face = "bold", size = 12),
       strip.background = element_rect(fill = "white", colour = "black",
                                       linewidth = 1),
@@ -298,8 +318,10 @@ crea_grafico_nazione <- function(dati, nazione) {
 
 plot_slo <- crea_grafico_nazione(df_indici, "Slovenia")
 plot_cro <- crea_grafico_nazione(df_indici, "Croazia")
+mostra(plot_slo)
 ggsave("Grafico_2Pannelli_Slovenia_final.png", plot_slo,
        width = 12, height = 6, dpi = 300)
+mostra(plot_cro)
 ggsave("Grafico_2Pannelli_Croazia_final.png", plot_cro,
        width = 12, height = 6, dpi = 300)
 
@@ -355,6 +377,7 @@ fig_confronto <-
   ) &
   theme(legend.position = "bottom")
 
+mostra(fig_confronto)
 ggsave("Figura_Confronto_FOO_RRA.png", fig_confronto,
        width = 12, height = 5.5, dpi = 300)
 
@@ -437,6 +460,7 @@ fig_output <-
   ) &
   theme(legend.position = "bottom")
 
+mostra(fig_output)
 ggsave("Figura_OutputMetabarcoding.png", fig_output,
        width = 12, height = 4.8, dpi = 300)
 
@@ -459,6 +483,7 @@ levins_finale <- rra_matrice %>%
   ungroup() %>%
   dplyr::select(Popolazione, B_A)
 print(levins_finale)      # atteso: Slovenia 0.184, Croazia 0.268
+mostra_tabella(levins_finale, "Levins B_A")
 
 p_slo <- as.numeric(rra_matrice[rra_matrice$Popolazione == "Slovenia", -1]) / 100
 p_cro <- as.numeric(rra_matrice[rra_matrice$Popolazione == "Croazia",  -1]) / 100
@@ -485,6 +510,7 @@ set.seed(123)
 permanova_risultato <- adonis2(dist_matrix ~ Popolazione, data = metadati,
                                permutations = 9999, by = "terms")
 cat("\n=== PERMANOVA ===\n"); print(permanova_risultato)
+mostra_tabella(as.data.frame(permanova_risultato), "PERMANOVA area")
 # atteso: R2 = 0.0281, F = 2.92; il p va letto qui (una stima con 9999
 # permutazioni in Python da' circa 0.04)
 
@@ -506,14 +532,18 @@ print(dispersion_mod$group.distances)
 # fatto a mano che tratti diversamente gli autovalori negativi della matrice di
 # Bray-Curtis. I numeri da usare in tesi sono quelli stampati qui.
 
+disegna_betadisper <- function() {
+  plot(dispersion_mod, hull = FALSE, ellipse = TRUE,
+       main = "Multivariate dispersion of diet composition",
+       sub  = "Bray-Curtis dissimilarity on Hellinger-transformed RRA proportions",
+       col = unname(COL_AREA),
+       lwd = 2, seg.col = "grey80", seg.lwd = 0.5)
+  legend("topleft", legend = levels(gruppo),
+         col = unname(COL_AREA), pch = 16, bty = "n", cex = 1.1)
+}
+if (interactive()) disegna_betadisper()          # a schermo
 png("Betadisper_Plot_final.png", width = 2000, height = 1600, res = 300)
-plot(dispersion_mod, hull = FALSE, ellipse = TRUE,
-     main = "Multivariate dispersion of diet composition",
-     sub  = "Bray-Curtis dissimilarity on Hellinger-transformed RRA proportions",
-     col = unname(COL_AREA),
-     lwd = 2, seg.col = "grey80", seg.lwd = 0.5)
-legend("topleft", legend = levels(gruppo),
-       col = unname(COL_AREA), pch = 16, bty = "n", cex = 1.1)
+disegna_betadisper()                              # su file
 dev.off()
 
 # --- SIMPER -------------------------------------------------------------------
@@ -548,6 +578,7 @@ plot_simper <- ggplot(simper_summary,
        x = NULL, y = "Contribution to overall dissimilarity (%)") +
   tema_tesi + theme(legend.position = "top")
 
+mostra(plot_simper)
 ggsave("Grafico_SIMPER_final.png", plot_simper, width = 10, height = 7, dpi = 300)
 
 
@@ -634,6 +665,7 @@ plot_pcoa <- ggplot() +
   theme(legend.position = "bottom", legend.box = "vertical",
         legend.title = element_text(size = 9, colour = "grey25"))
 
+mostra(plot_pcoa)
 ggsave("Grafico_PCoA_final.png", plot_pcoa, width = 10, height = 8, dpi = 300)
 
 # --- Figura 3.6: tipi di dieta ------------------------------------------------
@@ -664,6 +696,7 @@ riepilogo_tipi <- expand_grid(Popolazione = c("Slovenia", "Croazia"),
          Popolazione = factor(Popolazione, levels = c("Slovenia", "Croazia")))
 
 print(riepilogo_tipi, n = Inf)
+mostra_tabella(riepilogo_tipi, "Tipi di dieta")
 # atteso: Cervus only 15 SLO / 20 CRO; Capreolus only 20 / 15; misti 14 / 6;
 # Sus only 1 / 7; Caprinae only 2 / 1; domestici 0 / 2
 
@@ -689,6 +722,7 @@ plot_tipi <- ggplot(riepilogo_tipi, aes(x = pct, y = tipo, fill = Popolazione)) 
        x = "Percentage of samples in the geographic area (%)", y = NULL) +
   tema_tesi + theme(legend.position = "bottom")
 
+mostra(plot_tipi)
 ggsave("Figura_TipiDieta.png", plot_tipi, width = 9.5, height = 5.5, dpi = 300)
 
 
@@ -773,6 +807,7 @@ plot_hhh <- ggplot() +
        x = "Habitat heterogeneity (NDVI standard deviation)", y = NULL) +
   tema_tesi + theme(legend.position = "top")
 
+mostra(plot_hhh)
 ggsave("HHH_Logistic_Plot_final.png", plot_hhh, width = 10, height = 6.5, dpi = 300)
 
 
@@ -859,6 +894,7 @@ fig_gerarchica <-
                       c("Roe deer-dominated", "Red deer-dominated")) +
   plot_layout(guides = "collect") & theme(legend.position = "bottom")
 
+mostra(fig_gerarchica)
 ggsave("Grafico_Gerarchico_Cinghiale_Cervidi_final.png", fig_gerarchica,
        width = 12, height = 6, dpi = 300)
 
@@ -933,6 +969,7 @@ plot_rda <- ggplot() +
        y = paste0("RDA2 (", var_explained[2], "%)")) +
   tema_tesi + theme(legend.position = "top")
 
+mostra(plot_rda)
 ggsave("RDA_triplot_final.png", plot_rda, width = 10, height = 8, dpi = 200)
 
 
@@ -986,6 +1023,7 @@ riepilogo_regioni <- df_reg %>%
             campioni_misti = sum(ricchezza > 1),
             .groups = "drop")
 cat("\n=== Riepilogo per regione ===\n"); print(riepilogo_regioni)
+mostra_tabella(riepilogo_regioni, "Riepilogo per regione")
 # atteso: Slovenia 52 campioni, 22 individui, 14 misti (quota e NDVI_sd da
 #         rileggere: cambiano con i 3 campioni recuperati)
 #         Gorski kotar 22, 13, 850 m, 0.050, 1 misto
@@ -1102,6 +1140,7 @@ torte_aree <- aree_studio %>%
             across(all_of(names(mappa_categorie)), ~ round(mean(.x), 2)),
             .groups = "drop")
 print(torte_aree)
+mostra_tabella(torte_aree, "Torte per area di studio")
 write_csv(torte_aree, "Torte_aree_3.csv")
 # atteso (anteprima Python):
 #   Slovenia         52 22 | 48.48 36.29  3.90 2.39  8.87  0.08 0
@@ -1119,6 +1158,7 @@ tab_3aree <- aree_studio %>%
   mutate(Taxon = factor(Taxon, levels = ordine_taxa)) %>%
   arrange(Taxon)
 cat("\n=== FOO e RRA per area di studio (descrittivo) ===\n"); print(tab_3aree, width = Inf)
+mostra_tabella(tab_3aree, "FOO e RRA per area di studio")
 write.csv2(tab_3aree, "Tabella_FOO_RRA_3aree.csv", row.names = FALSE)
 
 
@@ -1165,6 +1205,7 @@ fig_composizione <- ggplot(comp_long, aes(x = Sample_ID, y = RRA, fill = Categor
         legend.position = "bottom") +
   guides(fill = guide_legend(nrow = 1))
 
+mostra(fig_composizione)
 ggsave("Figura_ComposizioneCampioni.png", fig_composizione,
        width = 13, height = 5.5, dpi = 300)
 
@@ -1233,6 +1274,7 @@ coverage_fam <- coverage %>%
   arrange(Area, Famiglia)
 cat("\n=== Taxonomic coverage per famiglia (reads, dati grezzi) ===\n")
 print(coverage_fam %>% mutate(pct = round(pct, 2)), n = Inf)
+mostra_tabella(coverage_fam, "Coverage per famiglia")
 write.csv2(coverage_fam %>% mutate(pct = round(pct, 2)),
            "Tabella_coverage_famiglie.csv", row.names = FALSE)
 # atteso: Slovenia Cervidae 85.38, Bovidae 8.40, Suidae 5.98, Canidae 0.22,
@@ -1263,6 +1305,7 @@ fig_coverage <- ggplot(coverage_fam, aes(x = 1, y = pct, fill = Famiglia)) +
         strip.text = element_text(face = "bold", size = 12),
         legend.title = element_blank(), legend.position = "bottom")
 
+mostra(fig_coverage)
 ggsave("Figura_TaxonomicCoverage.png", fig_coverage, width = 10, height = 5.5, dpi = 300)
 
 
@@ -1280,6 +1323,7 @@ tab_covariate <- df_env %>%
                    list(min = min, mediana = median, max = max)),
             .groups = "drop")
 cat("\n=== Covariate ambientali per area ===\n"); print(tab_covariate, width = Inf)
+mostra_tabella(tab_covariate, "Covariate ambientali")
 write.csv2(tab_covariate, "Tabella_covariate_ambientali.csv", row.names = FALSE)
 # atteso: quota Slovenia 634-1,509 m, Croazia 103-1,257 m (media nel buffer di 2 km)
 
@@ -1355,6 +1399,7 @@ if (all(file.exists(FILE_NDVI)) &&
     theme(legend.title = element_text(), strip.text = element_text(face = "bold"),
           panel.grid = element_blank())
 
+  mostra(fig_ndvi)
   ggsave("Figura_NDVI_buffer_esempio.png", fig_ndvi, width = 12, height = 4.8, dpi = 300)
 } else {
   cat("\nSezione 17 saltata: servono i pacchetti terra e sf e i file",
