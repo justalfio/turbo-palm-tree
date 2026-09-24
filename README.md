@@ -103,6 +103,24 @@ FILE_PUNTI     <- "Punti_103_per_QGIS.csv"                # sezioni 13 e 17
 FILE_COV_SLO   <- "Taxonomic_coverage_Slovenia.csv"       # sezione 15 (dati grezzi)
 FILE_COV_CRO   <- "Taxonomic_coverage_Croatia.csv"        # sezione 15 (dati grezzi)
 
+# --- controllo preliminare: tutti i file di input devono essere nella cartella -
+# Se Windows nasconde le estensioni, un file che in Esplora risorse si vede come
+# "Taxonomic_coverage_Slovenia.csv" in realta' si chiama "...csv.csv". Il
+# controllo lo riconosce e dice quale file rinominare, prima di iniziare.
+file_necessari <- c(FILE_SLO, FILE_CRO, FILE_AMBIENTE, FILE_INDIVIDUI,
+                    FILE_PUNTI, FILE_COV_SLO, FILE_COV_CRO)
+mancanti <- file_necessari[!file.exists(file_necessari)]
+for (f in mancanti) {
+  doppio <- paste0(f, ".csv")
+  if (file.exists(doppio)) {
+    message("Il file '", doppio, "' ha l'estensione doppia. Rinominalo con:\n",
+            "  file.rename(\"", doppio, "\", \"", f, "\")")
+  } else {
+    message("Manca il file '", f, "' nella cartella ", getwd())
+  }
+}
+if (length(mancanti) > 0) stop("File di input mancanti: lo script si ferma prima di iniziare.")
+
 # --- numerosita' attese (23/09/2026: +3 campioni sloveni recuperati) ----------
 N_SLO <- 52
 N_CRO <- 51
