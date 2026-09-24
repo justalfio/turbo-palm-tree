@@ -65,6 +65,11 @@
 #     metodo per tutti i campioni). ELEV_mean = media nel buffer di 2 km (i
 #     vecchi valori coincidono entro 1 m). I sottotitoli della figura
 #     gerarchica leggono ora il p dal modello invece di un numero scritto a mano.
+# 17. (24/09/2026) Nuove sezioni 13-17: tre aree di studio per le mappe e CSV
+#     per QGIS; tabella FOO/RRA per area di studio; Figura G (composizione dei
+#     singoli campioni); torte del taxonomic coverage per famiglia (dati grezzi);
+#     tabella delle covariate per area; figura NDVI dei tre buffer di esempio
+#     (facoltativa: serve terra + sf). La sessionInfo diventa la sezione 18.
 #
 # NOTA SULLA SOGLIA DELL'1%: i due file FILE DEFINITIVO hanno gia' la soglia
 # applicata a monte. Lo script lo verifica invece di darlo per scontato.
@@ -91,7 +96,10 @@ FILE_CRO       <- "Croatian wolves FILE DEFINITIVO.csv"
 FILE_AMBIENTE  <- "Wolf_NDVI_Dynamic_Dinaric.csv"
 OUT_FOO_RRA    <- "FOO_RRA_Slovenia_and_Croatia.csv"
 OUT_COMMUNITY  <- "Community_Matrix_SloCro.csv"
-FILE_INDIVIDUI <- "individui_e_branchi_103_campioni.csv"  # solo per la sezione 11
+FILE_INDIVIDUI <- "individui_e_branchi_103_campioni.csv"  # sezioni 11 e 13
+FILE_PUNTI     <- "Punti_103_per_QGIS.csv"                # sezioni 13 e 17
+FILE_COV_SLO   <- "Taxonomic_coverage_Slovenia.csv"       # sezione 15 (dati grezzi)
+FILE_COV_CRO   <- "Taxonomic_coverage_Croatia.csv"        # sezione 15 (dati grezzi)
 
 # --- numerosita' attese (23/09/2026: +3 campioni sloveni recuperati) ----------
 N_SLO <- 52
@@ -218,7 +226,7 @@ print(foo_rra_finale, n = Inf)
 write.csv2(foo_rra_finale, OUT_FOO_RRA, row.names = FALSE)
 
 # Valori attesi in tesi (Tabella 3.2):
-#   Slovenia: Capreolus 55.10 / 45.41 - Cervus 48.98 / 38.42 - Caprinae 10.20 / 9.41
+#   Slovenia (52): Capreolus 57.69 / 48.48 - Cervus 48.08 / 36.29 - Caprinae 9.62 / 8.87
 #   Croazia : Cervus 41.18 / 40.39 - Capreolus 31.37 / 30.20 - Sus 19.61 / 18.84
 
 
@@ -1007,7 +1015,355 @@ print(permanova_regioni)
 
 
 # ==============================================================================
-# 12. AMBIENTE DI ESECUZIONE (per la sezione Software and Reproducibility)
+# 13. TRE AREE DI STUDIO PER LE MAPPE (Risultati) E FILE PER QGIS
+# Le tre aree seguono i raggruppamenti della presentazione del laboratorio
+# (De Barba et al., EVMC 2025): Slovenia; Northern Croatia = Zumberak + Gorski
+# kotar (+ HRV027, Banovina, che Octenjak et al. 2020 mettono nella regione
+# North); Southern Croatia = Lika + Dalmazia. Servono SOLO per le mappe e le
+# tabelle descrittive: nessun test statistico usa questa divisione.
+# ==============================================================================
+
+leggi_punti <- function(f) {
+  # il file puo' essere stato risalvato da Excel con ";" e virgola decimale
+  prima_riga <- readLines(f, n = 1, encoding = "UTF-8")
+  if (grepl(";", prima_riga)) {
+    dati <- read_csv2(f, show_col_types = FALSE)
+  } else {
+    dati <- read_csv(f, show_col_types = FALSE)
+  }
+  dati %>% mutate(Latitude  = as.numeric(Latitude),
+                  Longitude = as.numeric(Longitude))
+}
+punti <- leggi_punti(FILE_PUNTI)
+stopifnot(nrow(punti) == N_TOT, all(punti$Sample %in% df_env$Sample_ID))
+
+branchi <- read_csv(FILE_INDIVIDUI, show_col_types = FALSE) %>%
+  dplyr::select(Sample, Pack)
+
+# Categorie delle torte (uguali in tutte le mappe e nella Figura G)
+mappa_categorie <- list(
+  ROE      = "Capreolus capreolus",
+  RED      = "Cervus elaphus",
+  BOAR     = "Sus scrofa",
+  CHAMOIS  = "Rupicapra rupicapra",
+  CAPRINAE = "Caprinae",                              # non risolto, mai assegnato
+  DOMESTIC = c("Ovis aries", "Bos", "Capra", "Ovis"),  # taxa assigned to domestic livestock
+  LEPUS    = "Lepus"
+)
+# Palette verificata (tutte le coppie: CVD dE minimo 9.0, visione normale 15.7);
+# non usa il blu e il rosso delle due aree geografiche.
+COL_TAXA <- c(ROE = "#eda100", RED = "#8c510a", BOAR = "#4a3aa7",
+              CHAMOIS = "#00a5a8", CAPRINAE = "#c51b7d", DOMESTIC = "#7570b3",
+              LEPUS = "#4d9221")
+LAB_TAXA <- parse(text = c("'Roe deer'", "'Red deer'", "'Wild boar'",
+                           "'Northern chamois'", "'Caprinae (unresolved)'",
+                           "'Domestic livestock'", "italic('Lepus')~plain('sp.')"))
+
+ORDINE_AREE <- c("Slovenia", "Northern Croatia", "Southern Croatia")
+
+aree_studio <- df_reg %>%
+  mutate(Study_area = case_when(
+           Geographic_Area == "Slovenia"                          ~ "Slovenia",
+           Regione %in% c("Zumberak", "Gorski kotar", "HRV027")   ~ "Northern Croatia",
+           TRUE                                                   ~ "Southern Croatia"),
+         Study_area = factor(Study_area, levels = ORDINE_AREE))
+for (k in names(mappa_categorie)) {
+  aree_studio[[k]] <- rowSums(as.matrix(aree_studio[, mappa_categorie[[k]], drop = FALSE]))
+}
+stopifnot(all(abs(rowSums(aree_studio[, names(mappa_categorie)]) - 100) < 1e-6))
+print(table(aree_studio$Study_area))
+stopifnot(identical(as.vector(table(aree_studio$Study_area)), c(52L, 35L, 16L)))
+
+# --- 13.1 CSV per QGIS: una riga per campione (torte delle mappe di dettaglio) --
+torte_campioni <- aree_studio %>%
+  left_join(branchi, by = c("Sample_ID" = "Sample")) %>%
+  left_join(punti %>% dplyr::select(Sample, Latitude, Longitude),
+            by = c("Sample_ID" = "Sample")) %>%
+  transmute(Sample = Sample_ID,
+            Area   = if_else(Geographic_Area == "Slovenia", "Slovenia", "Croatia"),
+            Study  = as.character(Study_area),
+            Region = if_else(Geographic_Area == "Slovenia",
+                             str_remove(Pack, " pack$"), Regione),
+            Latitude, Longitude,
+            across(all_of(names(mappa_categorie)), ~ round(.x, 3)),
+            NTAXA = ricchezza)
+stopifnot(!any(is.na(torte_campioni$Latitude)))
+write_csv(torte_campioni, "Torte_campioni_103.csv")
+
+# --- 13.2 CSV per QGIS: una riga per area (torte della mappa generale) --------
+torte_aree <- aree_studio %>%
+  left_join(punti %>% dplyr::select(Sample, Latitude, Longitude),
+            by = c("Sample_ID" = "Sample")) %>%
+  group_by(Study = Study_area) %>%
+  summarise(N         = n(),
+            N_IND     = n_distinct(Individual, na.rm = TRUE),  # MSV164 e HRV018 senza genotipo
+            Latitude  = round(mean(Latitude), 5),
+            Longitude = round(mean(Longitude), 5),
+            across(all_of(names(mappa_categorie)), ~ round(mean(.x), 2)),
+            .groups = "drop")
+print(torte_aree)
+write_csv(torte_aree, "Torte_aree_3.csv")
+# atteso (anteprima Python):
+#   Slovenia         52 22 | 48.48 36.29  3.90 2.39  8.87  0.08 0
+#   Northern Croatia 35 17 | 35.43 58.85  2.86 0     0     2.86 0
+#   Southern Croatia 16 12 | 18.75  0    53.81 0    12.84 13.73 0.87
+
+# --- 13.3 Tabella FOO e RRA per area di studio (10 taxa) ----------------------
+tab_3aree <- aree_studio %>%
+  dplyr::select(Study_area, all_of(ordine_taxa)) %>%
+  pivot_longer(-Study_area, names_to = "Taxon", values_to = "RRA") %>%
+  group_by(Study_area, Taxon) %>%
+  summarise(FOO = round(100 * mean(RRA > 0), 2),
+            RRA = round(mean(RRA), 2), .groups = "drop") %>%
+  pivot_wider(names_from = Study_area, values_from = c(FOO, RRA)) %>%
+  mutate(Taxon = factor(Taxon, levels = ordine_taxa)) %>%
+  arrange(Taxon)
+cat("\n=== FOO e RRA per area di studio (descrittivo) ===\n"); print(tab_3aree, width = Inf)
+write.csv2(tab_3aree, "Tabella_FOO_RRA_3aree.csv", row.names = FALSE)
+
+
+# ==============================================================================
+# 14. FIGURA G - COMPOSIZIONE DEI SINGOLI CAMPIONI (come nella presentazione)
+# Una barra per campione, divisa per categoria secondo la RRA del campione.
+# ==============================================================================
+
+comp <- aree_studio %>%
+  dplyr::select(Sample_ID, Study_area, all_of(names(mappa_categorie)))
+mat_comp <- as.matrix(comp[, names(mappa_categorie)])
+comp$dominante <- names(mappa_categorie)[max.col(mat_comp, ties.method = "first")]
+comp$quota_dom <- apply(mat_comp, 1, max)
+ordine_campioni <- comp %>%
+  arrange(Study_area, factor(dominante, levels = names(COL_TAXA)), desc(quota_dom)) %>%
+  pull(Sample_ID)
+
+comp_long <- comp %>%
+  pivot_longer(all_of(names(mappa_categorie)), names_to = "Categoria",
+               values_to = "RRA") %>%
+  filter(RRA > 0) %>%
+  mutate(Sample_ID = factor(Sample_ID, levels = ordine_campioni),
+         Categoria = factor(Categoria, levels = rev(names(COL_TAXA))))
+
+n_per_area <- table(comp$Study_area)
+etichette_aree <- setNames(paste0(names(n_per_area), "\n(n = ", n_per_area, ")"),
+                           names(n_per_area))
+
+fig_composizione <- ggplot(comp_long, aes(x = Sample_ID, y = RRA, fill = Categoria)) +
+  geom_col(width = 0.85, colour = "white", linewidth = 0.15) +
+  facet_grid(~ Study_area, scales = "free_x", space = "free_x",
+             labeller = labeller(Study_area = etichette_aree)) +
+  scale_fill_manual(values = COL_TAXA, breaks = names(COL_TAXA), labels = LAB_TAXA) +
+  scale_y_continuous(expand = c(0, 0), breaks = seq(0, 100, 25),
+                     labels = function(x) paste0(x, "%")) +
+  labs(title = "Prey composition of individual samples",
+       subtitle = paste("Each bar is one faecal sample; segments are relative read",
+                        "abundance (proportion of prey sequences, not biomass)"),
+       x = "Samples, ordered by dominant prey", y = "Relative read abundance") +
+  tema_tesi +
+  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank(),
+        panel.grid.major.x = element_blank(),
+        strip.text = element_text(face = "bold"),
+        legend.position = "bottom") +
+  guides(fill = guide_legend(nrow = 1))
+
+ggsave("Figura_ComposizioneCampioni.png", fig_composizione,
+       width = 13, height = 5.5, dpi = 300)
+
+
+# ==============================================================================
+# 15. TORTE DEL TAXONOMIC COVERAGE PER FAMIGLIA (dati grezzi, non filtrati)
+# Si usa count_total di ogni MOTU (totale del laboratorio su tutti i campioni
+# della corsa). Le colonne dei singoli campioni NON si usano: nel file sloveno
+# l'intestazione delle ultime colonne e' spostata (MSV1MU compare come "0" e c'e'
+# una colonna spuria "7524"), mentre count_total e' integro (totale 839,437).
+# Nomi dopo la riassegnazione BLAST (scientific_name_edited, dove presente).
+# Le sequenze riassegnate al predatore (Canis lupus) sono escluse.
+# ==============================================================================
+
+leggi_coverage <- function(f, salta) {
+  read_delim(f, delim = ";", skip = salta, col_types = cols(.default = col_character()),
+             locale = locale(encoding = "UTF-8")) %>%
+    rename_with(~ str_remove(.x, "^﻿")) %>%
+    mutate(nome = if ("scientific_name_edited" %in% names(.))
+                    coalesce(na_if(str_trim(scientific_name_edited), ""),
+                             str_trim(scientific_name))
+                  else str_trim(scientific_name),
+           reads = as.numeric(count_total)) %>%
+    filter(!is.na(reads))
+}
+cov_slo <- leggi_coverage(FILE_COV_SLO, salta = 1) %>% mutate(Area = "Slovenia")
+cov_cro <- leggi_coverage(FILE_COV_CRO, salta = 0) %>% mutate(Area = "Croatia")
+stopifnot(sum(cov_slo$reads) == 839437, sum(cov_cro$reads) == 3980866)
+
+famiglia <- function(n) case_when(
+  n %in% c("Cervus elaphus", "Capreolus capreolus", "Cervinae", "Dama dama") ~ "Cervidae",
+  n %in% c("Caprinae", "Capra", "Bos", "Bos taurus", "Ovis", "Ovis aries",
+           "Rupicapra", "Rupicapra rupicapra", "Bovidae")                   ~ "Bovidae",
+  n == "Sus scrofa"                                                           ~ "Suidae",
+  n %in% c("Vulpes vulpes", "Canidae")                                        ~ "Canidae",
+  n == "Lepus"                                                                ~ "Leporidae",
+  n %in% c("Gallus gallus", "Phasianinae")                                    ~ "Phasianidae",
+  n == "Canis lupus"                                                          ~ "PREDATORE",
+  TRUE                                                                        ~ "Not assigned to family")
+
+ORDINE_FAMIGLIE <- c("Cervidae", "Bovidae", "Suidae", "Canidae", "Leporidae",
+                     "Phasianidae", "Not assigned to family")
+# Colori scelti per le coppie di fette adiacenti nelle due torte (CVD dE >= 15):
+# Suidae e Leporidae hanno lo stesso colore di Sus scrofa e Lepus nelle mappe.
+COL_FAMIGLIE <- c(Cervidae = "#882255", Bovidae = "#999933", Suidae = "#4a3aa7",
+                  Canidae = "#e87ba4", Leporidae = "#4d9221",
+                  Phasianidae = "#d95f02", "Not assigned to family" = "#9a9a9a")
+
+coverage <- bind_rows(cov_slo, cov_cro) %>%
+  mutate(Famiglia = famiglia(nome))
+cat("\nReads escluse perche' riassegnate al predatore:\n")
+print(coverage %>% filter(Famiglia == "PREDATORE") %>% count(Area, wt = reads))
+cat("Nomi rimasti sopra il livello di famiglia:\n")
+print(coverage %>% filter(Famiglia == "Not assigned to family") %>%
+        count(Area, nome, wt = reads))
+
+coverage_fam <- coverage %>%
+  filter(Famiglia != "PREDATORE") %>%
+  group_by(Area, Famiglia) %>%
+  summarise(reads = sum(reads), MOTU = n(), .groups = "drop") %>%
+  group_by(Area) %>%
+  mutate(pct = 100 * reads / sum(reads)) %>%
+  ungroup() %>%
+  mutate(Famiglia = factor(Famiglia, levels = ORDINE_FAMIGLIE),
+         Area = factor(Area, levels = c("Slovenia", "Croatia"))) %>%
+  arrange(Area, Famiglia)
+cat("\n=== Taxonomic coverage per famiglia (reads, dati grezzi) ===\n")
+print(coverage_fam %>% mutate(pct = round(pct, 2)), n = Inf)
+write.csv2(coverage_fam %>% mutate(pct = round(pct, 2)),
+           "Tabella_coverage_famiglie.csv", row.names = FALSE)
+# atteso: Slovenia Cervidae 85.38, Bovidae 8.40, Suidae 5.98, Canidae 0.22,
+#         Phasianidae 0.02, non assegnati 0.01 (839,285 reads, 152 del predatore escluse)
+#         Croazia Cervidae 62.38, Suidae 20.82, Canidae 12.41, Bovidae 4.30,
+#         Leporidae 0.09 (3,980,866 reads)
+
+totali_cov <- coverage_fam %>% group_by(Area) %>% summarise(reads = sum(reads), .groups = "drop")
+etichette_cov <- setNames(paste0(totali_cov$Area, "\n",
+                                 formatC(totali_cov$reads, format = "d", big.mark = ","),
+                                 " reads"),
+                          totali_cov$Area)
+
+fig_coverage <- ggplot(coverage_fam, aes(x = 1, y = pct, fill = Famiglia)) +
+  geom_col(width = 1, colour = "white", linewidth = 0.6) +
+  geom_text(aes(label = ifelse(pct >= 3, sprintf("%.1f%%", pct), "")),
+            position = position_stack(vjust = 0.5), colour = "white",
+            fontface = "bold", size = 3.6) +
+  coord_polar(theta = "y", direction = -1) +
+  facet_wrap(~ Area, labeller = labeller(Area = etichette_cov)) +
+  scale_fill_manual(values = COL_FAMIGLIE, breaks = ORDINE_FAMIGLIE, drop = TRUE) +
+  labs(title = "Taxonomic coverage of the unfiltered sequence data",
+       subtitle = paste("Share of sequence reads by family, all sequenced samples;",
+                        "slices below 3% are listed in the table")) +
+  theme_void(base_size = 12) +
+  theme(plot.title = element_text(face = "bold"),
+        plot.subtitle = element_text(colour = "grey35"),
+        strip.text = element_text(face = "bold", size = 12),
+        legend.title = element_blank(), legend.position = "bottom")
+
+ggsave("Figura_TaxonomicCoverage.png", fig_coverage, width = 10, height = 5.5, dpi = 300)
+
+
+# ==============================================================================
+# 16. COVARIATE AMBIENTALI PER AREA GEOGRAFICA (Risultati, tabella descrittiva)
+# Sostituisce la colonna della quota della tabella della Sezione 2.1: nei Metodi
+# resta il disegno di campionamento (130 campioni), qui i dati usati (103).
+# ==============================================================================
+
+tab_covariate <- df_env %>%
+  mutate(Area = if_else(Geographic_Area == "Slovenia", "Slovenia", "Croatia")) %>%
+  group_by(Area) %>%
+  summarise(n = n(),
+            across(c(ELEV_mean, NDVI_mean, NDVI_sd),
+                   list(min = min, mediana = median, max = max)),
+            .groups = "drop")
+cat("\n=== Covariate ambientali per area ===\n"); print(tab_covariate, width = Inf)
+write.csv2(tab_covariate, "Tabella_covariate_ambientali.csv", row.names = FALSE)
+# atteso: quota Slovenia 634-1,509 m, Croazia 103-1,257 m (media nel buffer di 2 km)
+
+
+# ==============================================================================
+# 17. FIGURA NDVI: TRE BUFFER DI ESEMPIO (Metodi 2.9)
+# Richiede i pacchetti terra e sf e i tre GeoTIFF esportati con
+# GEE_export_per_mappe.js. Se mancano, la sezione viene saltata.
+# Scelta con regola fissa, non in base alla dieta: NDVI_sd minimo (HRV033),
+# mediano (MSV04C) e massimo (MSV17C) fra i 103 campioni.
+# ==============================================================================
+
+FILE_NDVI <- c(HRV033 = "NDVI_HRV033_2022.tif",
+               MSV04C = "NDVI_MSV04C_2020.tif",
+               MSV17C = "NDVI_MSV17C_2020.tif")
+RUOLO_NDVI <- c(HRV033 = "minimum", MSV04C = "median", MSV17C = "maximum")
+
+if (all(file.exists(FILE_NDVI)) &&
+    requireNamespace("terra", quietly = TRUE) &&
+    requireNamespace("sf", quietly = TRUE)) {
+
+  centri <- punti %>%
+    filter(Sample %in% names(FILE_NDVI)) %>%
+    sf::st_as_sf(coords = c("Longitude", "Latitude"), crs = 4326) %>%
+    sf::st_transform(32633)
+  xy_centri <- sf::st_coordinates(centri)
+  rownames(xy_centri) <- centri$Sample
+
+  pannelli <- purrr::map_dfr(names(FILE_NDVI), function(s) {
+    r <- terra::rast(FILE_NDVI[[s]])
+    names(r) <- "NDVI"
+    r <- terra::classify(r, cbind(-Inf, -1.0001, NA))   # nodata (-9999) -> NA
+    # controllo: media e dev. standard nel buffer devono tornare con GEE
+    buf <- sf::st_buffer(centri[centri$Sample == s, ], 2000, nQuadSegs = 16)
+    v <- terra::extract(r, terra::vect(buf))$NDVI
+    rif <- df_env %>% filter(Sample_ID == s)
+    cat(sprintf("%s: NDVI_sd dal GeoTIFF %.4f (GEE %.4f); NDVI_mean %.4f (GEE %.4f)\n",
+                s, sd(v, na.rm = TRUE), rif$NDVI_sd, mean(v, na.rm = TRUE), rif$NDVI_mean))
+    as.data.frame(r, xy = TRUE, na.rm = TRUE) %>%
+      mutate(Sample = s,
+             x_km = (x - xy_centri[s, "X"]) / 1000,
+             y_km = (y - xy_centri[s, "Y"]) / 1000)
+  })
+
+  lim_basso <- floor(quantile(pannelli$NDVI, 0.02) * 20) / 20
+  lim_alto  <- ceiling(max(pannelli$NDVI) * 20) / 20
+  cat("Scala dei colori NDVI:", lim_basso, "-", lim_alto,
+      "(valori sotto il limite inferiore mostrati col colore piu' chiaro)\n")
+
+  etichette_ndvi <- sapply(names(FILE_NDVI), function(s) {
+    sprintf("%s: NDVI sd = %.3f (%s)", s,
+            df_env$NDVI_sd[df_env$Sample_ID == s], RUOLO_NDVI[[s]])
+  })
+  cerchio <- tibble(t = seq(0, 2 * pi, length.out = 361),
+                    x_km = 2 * cos(t), y_km = 2 * sin(t))
+
+  fig_ndvi <- ggplot(pannelli %>% mutate(Sample = factor(Sample, levels = names(FILE_NDVI))),
+                     aes(x = x_km, y = y_km)) +
+    geom_raster(aes(fill = NDVI)) +
+    geom_path(data = cerchio, colour = "black", linewidth = 0.6) +
+    geom_point(data = tibble(x_km = 0, y_km = 0), shape = 21, fill = "white",
+               colour = "black", size = 2.2, stroke = 0.8) +
+    facet_wrap(~ Sample, labeller = labeller(Sample = etichette_ndvi)) +
+    scale_fill_gradientn(colours = c("#f7fcf5", "#c7e9c0", "#74c476", "#238b45", "#00441b"),
+                         limits = c(lim_basso, lim_alto), oob = scales::squish,
+                         name = "NDVI") +
+    coord_equal(xlim = c(-2.4, 2.4), ylim = c(-2.4, 2.4), expand = FALSE) +
+    labs(title = "Within-buffer variation in NDVI",
+         subtitle = paste("Sentinel-2 median composite, 1 June-31 August of the",
+                          "collection year; circle = 2-km buffer, point = sampling location"),
+         x = "Distance from sampling point (km)", y = "Distance from sampling point (km)") +
+    tema_tesi +
+    theme(legend.title = element_text(), strip.text = element_text(face = "bold"),
+          panel.grid = element_blank())
+
+  ggsave("Figura_NDVI_buffer_esempio.png", fig_ndvi, width = 12, height = 4.8, dpi = 300)
+} else {
+  cat("\nSezione 17 saltata: servono i pacchetti terra e sf e i file",
+      paste(FILE_NDVI, collapse = ", "), "nella cartella di lavoro.\n")
+}
+
+
+# ==============================================================================
+# 18. AMBIENTE DI ESECUZIONE (per la sezione Software and Reproducibility)
 # ==============================================================================
 cat("\n\n=== sessionInfo() ===\n")
 print(sessionInfo())
