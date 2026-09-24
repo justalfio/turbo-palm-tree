@@ -1062,15 +1062,21 @@ print(permanova_regioni)
 # ==============================================================================
 
 leggi_punti <- function(f) {
-  # il file puo' essere stato risalvato da Excel con ";" e virgola decimale
+  # Il file puo' essere stato risalvato da Excel: separatore ";" oppure ",",
+  # decimali con il punto oppure con la virgola. Si legge tutto come testo e si
+  # convertono le coordinate a mano, cosi' il punto decimale non viene mai
+  # scambiato per un separatore delle migliaia (errore del 24/09: 46.14 -> 4614).
   prima_riga <- readLines(f, n = 1, encoding = "UTF-8")
-  if (grepl(";", prima_riga)) {
-    dati <- read_csv2(f, show_col_types = FALSE)
-  } else {
-    dati <- read_csv(f, show_col_types = FALSE)
-  }
-  dati %>% mutate(Latitude  = as.numeric(Latitude),
-                  Longitude = as.numeric(Longitude))
+  separatore <- if (grepl(";", prima_riga)) ";" else ","
+  a_numero <- function(x) as.numeric(gsub(",", ".", x, fixed = TRUE))
+  dati <- read_delim(f, delim = separatore,
+                     col_types = cols(.default = col_character()),
+                     locale = locale(encoding = "UTF-8")) %>%
+    mutate(Latitude = a_numero(Latitude), Longitude = a_numero(Longitude))
+  # controllo: tutti i punti devono cadere fra Slovenia e Croazia
+  stopifnot(all(between(dati$Latitude, 42, 47.5)),
+            all(between(dati$Longitude, 13, 18.5)))
+  dati
 }
 punti <- leggi_punti(FILE_PUNTI)
 stopifnot(nrow(punti) == N_TOT, all(punti$Sample %in% df_env$Sample_ID))
