@@ -6,11 +6,15 @@
 # Ultima revisione: 27 settembre 2026
 #
 # COME SI USA
-#   1. Metti questo script nella cartella "File definitivi", insieme ai file
-#      elencati sotto, e aprila come cartella di lavoro. In RStudio:
+#   1. Metti questo script in una cartella che contenga solo gli 8 file
+#      elencati sotto (per esempio "File definitivi 102") e aprila come
+#      cartella di lavoro. In RStudio:
 #      Session > Set Working Directory > Choose Directory..., oppure
-#        setwd("C:/Users/OEM/Desktop/TESI MAGISTRALE LJUBLJANA ERASMUS/File definitivi")
+#        setwd("C:/Users/OEM/Desktop/TESI MAGISTRALE LJUBLJANA ERASMUS/File definitivi 102")
 #   2. Esegui:  source("Script_Tesi_Lupo_COMPLETO.R", encoding = "UTF-8")
+#      (oppure il pulsante "Source" in alto a destra nell'editor di RStudio).
+#      NON eseguirlo riga per riga (Run, Ctrl+Invio, Ctrl+Alt+R): in quel modo R
+#      non si ferma agli errori e i risultati possono restare incompleti.
 #      In RStudio i grafici compaiono anche nel pannello Plots.
 #   3. I grafici (.png) e i CSV vengono riscritti nella cartella con gli stessi
 #      nomi di prima; numeri_risultati.tex (i numeri della tesi) va caricato su
@@ -20,24 +24,22 @@
 #   4. In output_R/ trovi le versioni PDF dei grafici, le tabelle, i dati
 #      derivati, il log (log_esecuzione.txt) e i confronti con la bozza.
 #
-# FILE NELLA CARTELLA
-#   Stessi nomi della versione precedente:
+# FILE NELLA CARTELLA (8, tutti obbligatori; CSV separati da ";" oppure da ",")
+#   Dati grezzi del laboratorio (tabelle delle varianti, tutti i campioni
+#   sequenziati: il filtro fino ai 102 campioni lo applica lo script):
 #     Taxonomic_coverage_Slovenia.csv, Taxonomic_coverage_Croatia.csv
-#         tabelle delle varianti (dati grezzi): da qui si ricostruiscono le matrici
-#     Slovenia wolves FILE DEFINITIVO.csv, Croatian wolves FILE DEFINITIVO.csv
-#         matrici finali: ora servono solo per il confronto con le matrici
-#         ricostruite (le differenze vanno in output_R/dati_derivati/)
-#     Punti_103_per_QGIS.csv (separato da ";" oppure da ","; la riga di
-#         HRV018 non viene usata)
-#   Nuovi (27/09/2026), senza HRV018 (separati da ";" oppure da ","):
+#   Solo i 102 campioni analizzati:
 #     NDVI_quota_102_campioni.csv            quota e NDVI nel buffer di 2 km
 #     individui_e_branchi_102_campioni.csv   individui e branchi
-#   Nuovi (26/09/2026):
+#     Punti_102_per_QGIS.csv                 data e coordinate
+#     gruppi_geografici_102.csv              aree di studio, gruppi e branchi
+#   Scelte e numeri della tesi:
 #     assegnazioni_varianti.csv   assegnazione finale e ruolo di ogni variante
-#     gruppi_geografici_103.csv   aree di studio, gruppi, branchi e regioni
-#                                 (la riga di HRV018 non viene usata)
 #     specifica_macro.csv         elenco dei numeri citati nella tesi
-#   Facoltativi (se mancano, i relativi controlli vengono saltati):
+#   Facoltativi (se mancano, i relativi controlli vengono saltati; non servono
+#   per la tesi):
+#     Slovenia wolves FILE DEFINITIVO.csv, Croatian wolves FILE DEFINITIVO.csv
+#         (vecchie matrici finali, solo per il confronto con quelle ricostruite),
 #     Punti_130_campionamento.csv, risultati_chiave_python.csv,
 #     numeri_risultati_provvisori.tex
 #
@@ -52,10 +54,15 @@
 #     della fatta): campioni analizzati 102 (52 sloveni, 50 croati).
 #   - 27/09/2026: quota e NDVI da NDVI_quota_102_campioni.csv (stessa procedura,
 #     102 campioni; maschera delle nuvole SCL + QA60 dove disponibile), individui
-#     e branchi da individui_e_branchi_102_campioni.csv; il file per le mappe a
+#     e branchi da individui_e_branchi_102_campioni.csv, date e coordinate da
+#     Punti_102_per_QGIS.csv, gruppi da gruppi_geografici_102.csv: tutti i file
+#     contengono solo i 102 campioni analizzati; il file per le mappe a
 #     torta si chiama ora Torte_campioni_102.csv; nuovo Torte_gruppi_4.csv
 #     (Slovenia, Zumberak group, Gorski Kotar, Southern Croatia) per la mappa
 #     con le torte.
+#   - Nuove figure della tesi (sezione 3.3): Figura_Dieta_Slovenia e
+#     Figura_Dieta_Croazia, una per area, al posto di Figura_Confronto_FOO_RRA
+#     (che viene ancora prodotta ma non e' piu' nella tesi).
 #
 # SCELTE DOCUMENTATE (modificabili nel blocco di configurazione)
 #   - filtro di profondita' minima: 2.000 reads totali per campione nella
@@ -80,19 +87,19 @@ rm(list = ls())
 
 PROJECT_DIR <- getwd()          # la cartella "File definitivi"
 
-# --- file di ingresso: stessi nomi della versione precedente ------------------
-FILE_SLO       <- "Slovenia wolves FILE DEFINITIVO.csv"   # solo confronto
-FILE_CRO       <- "Croatian wolves FILE DEFINITIVO.csv"   # solo confronto
-FILE_AMBIENTE  <- "NDVI_quota_102_campioni.csv"           # prima: Wolf_NDVI_Dynamic_Dinaric.csv
-FILE_INDIVIDUI <- "individui_e_branchi_102_campioni.csv"  # prima: individui_e_branchi_103_campioni.csv
-FILE_PUNTI     <- "Punti_103_per_QGIS.csv"
+# --- file di ingresso ----------------------------------------------------------
+FILE_AMBIENTE  <- "NDVI_quota_102_campioni.csv"           # quota e NDVI (102 campioni)
+FILE_INDIVIDUI <- "individui_e_branchi_102_campioni.csv"  # individui e branchi (102 campioni)
+FILE_PUNTI     <- "Punti_102_per_QGIS.csv"                # date e coordinate (102 campioni)
 FILE_COV_SLO   <- "Taxonomic_coverage_Slovenia.csv"       # tabella delle varianti
 FILE_COV_CRO   <- "Taxonomic_coverage_Croatia.csv"        # tabella delle varianti
 # --- file nuovi (26/09/2026) --------------------------------------------------
 FILE_ASSEGN    <- "assegnazioni_varianti.csv"
-FILE_GRUPPI    <- "gruppi_geografici_103.csv"
+FILE_GRUPPI    <- "gruppi_geografici_102.csv"             # gruppi e branchi (102 campioni)
 FILE_SPEC      <- "specifica_macro.csv"
 # --- facoltativi: se mancano, i controlli relativi vengono saltati -------------
+FILE_SLO       <- "Slovenia wolves FILE DEFINITIVO.csv"   # solo confronto
+FILE_CRO       <- "Croatian wolves FILE DEFINITIVO.csv"   # solo confronto
 FILE_P130      <- "Punti_130_campionamento.csv"
 FILE_PROV      <- "risultati_chiave_python.csv"
 FILE_TEX_PROV  <- "numeri_risultati_provvisori.tex"
@@ -137,10 +144,6 @@ if (getRversion() < "4.4.0") {
 }
 
 for (d in c(DIR_OUT, DIR_FIG, DIR_TAB, DIR_DAT)) dir.create(d, showWarnings = FALSE, recursive = TRUE)
-for (f in c(FILE_COV_SLO, FILE_COV_CRO, FILE_SLO, FILE_CRO, FILE_INDIVIDUI, FILE_PUNTI, FILE_AMBIENTE,
-            FILE_ASSEGN, FILE_GRUPPI, FILE_SPEC)) {
-  if (!file.exists(f)) stop("File mancante nella cartella di lavoro (", PROJECT_DIR, "): ", f)
-}
 
 # --- log di esecuzione --------------------------------------------------------
 F_LOG <- file.path(DIR_OUT, "log_esecuzione.txt")
@@ -166,6 +169,49 @@ LOG("Cartella del progetto: ", PROJECT_DIR)
 LOG("R ", as.character(getRversion()), "; seme ", SEED, "; permutazioni ", N_PERM)
 # sessionInfo subito, cosi' resta anche se l'esecuzione si interrompe
 writeLines(capture.output(sessionInfo()), file.path(DIR_OUT, "sessionInfo_inizio.txt"))
+
+# --- errori: scritti nel log (con source() lo script si ferma al primo errore) -----
+ERRORI <- character(0)
+options(error = function() {
+  msg <- trimws(geterrmessage())
+  ERRORI <<- c(ERRORI, msg)
+  cat(format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "  ERRORE: ", msg, "\n", sep = "", file = F_LOG, append = TRUE)
+})
+
+# --- controllo di tutti i file di ingresso, prima delle analisi --------------------
+mancanti <- c(FILE_COV_SLO, FILE_COV_CRO, FILE_AMBIENTE, FILE_INDIVIDUI, FILE_PUNTI, FILE_GRUPPI,
+              FILE_ASSEGN, FILE_SPEC)
+mancanti <- mancanti[!file.exists(mancanti)]
+if (length(mancanti) > 0) {
+  stop("File mancanti nella cartella di lavoro (", PROJECT_DIR, "): ", paste(mancanti, collapse = "; "),
+       ". Controlla che ci siano, con questi nomi esatti.", call. = FALSE)
+}
+# lettura di un CSV separato da ";" o da ",": tutto come testo
+leggi_auto <- function(f) {
+  prima <- readLines(f, n = 1, warn = FALSE, encoding = "UTF-8")
+  car <- strsplit(prima, "")[[1]]
+  sep <- if (sum(car == ";") > sum(car == ",")) ";" else ","
+  x <- read_delim(f, delim = sep, col_types = cols(.default = col_character()), locale = locale(encoding = "UTF-8"),
+                  trim_ws = TRUE, progress = FALSE, show_col_types = FALSE)
+  names(x) <- trimws(sub("^\ufeff", "", names(x)))
+  x
+}
+numero <- function(x) as.numeric(gsub(",", ".", x, fixed = TRUE))   # accetta 0.97 e 0,97
+controlla <- function(f, colonne, righe_min) {
+  x <- tryCatch(leggi_auto(f), error = function(e)
+    stop("Impossibile leggere ", f, " (se e' aperto in Excel, chiudilo): ", conditionMessage(e), call. = FALSE))
+  manc <- setdiff(colonne, names(x))
+  if (length(manc) > 0) stop("In ", f, " mancano le colonne: ", paste(manc, collapse = ", "),
+                             " (colonne trovate: ", paste(names(x), collapse = ", "), ")", call. = FALSE)
+  if (nrow(x) < righe_min) stop(f, " contiene ", nrow(x), " righe; ne servono almeno ", righe_min, call. = FALSE)
+  invisible(x)
+}
+controlla(FILE_INDIVIDUI, c("Sample", "Individual", "Pack", "GeneticSex", "GenotypeQI"), 102)
+controlla(FILE_PUNTI, c("Sample", "Date", "Year", "Latitude", "Longitude"), 102)
+controlla(FILE_AMBIENTE, c("Sample", "ELEV_mean", "NDVI_mean", "NDVI_sd"), 102)
+controlla(FILE_GRUPPI, c("Sample", "Study_area", "Group", "Region_cluster_comparison"), 102)
+controlla(FILE_SPEC, c("macro", "raw_key", "format"), 300)
+LOG("File di ingresso: tutti presenti e leggibili")
 
 # --- archivio dei risultati chiave (stessi nomi della versione Python) --------
 K <- list()
@@ -351,17 +397,6 @@ AREA_S <- RES$area
 # ==============================================================================
 # 3. FLUSSO DEI CAMPIONI, CONFRONTI, ESPORTAZIONI
 # ==============================================================================
-# lettura di un CSV separato da ";" o da ",": tutto come testo
-leggi_auto <- function(f) {
-  prima <- readLines(f, n = 1, warn = FALSE, encoding = "UTF-8")
-  car <- strsplit(prima, "")[[1]]
-  sep <- if (sum(car == ";") > sum(car == ",")) ";" else ","
-  x <- read_delim(f, delim = sep, col_types = cols(.default = col_character()), locale = locale(encoding = "UTF-8"),
-                  trim_ws = TRUE, progress = FALSE, show_col_types = FALSE)
-  names(x) <- sub("^\ufeff", "", names(x))
-  x
-}
-numero <- function(x) as.numeric(gsub(",", ".", x, fixed = TRUE))   # accetta 0.97 e 0,97
 if (file.exists(FILE_P130)) {
   p130 <- leggi_auto(FILE_P130)
   flusso <- p130 %>% dplyr::select(Sample, Area, Group, Status) %>%
@@ -410,10 +445,14 @@ confronta <- function(file, sep, area) {
   }
   bind_rows(diff)
 }
-diff_prev <- bind_rows(confronta(FILE_SLO, ";", "Slovenia"), confronta(FILE_CRO, ";", "Croatia"))
-if (nrow(diff_prev) > 0) LOG("Differenze dai FILE DEFINITIVO: ", nrow(diff_prev),
-                             " celle (elenco in output_R/dati_derivati/differenze_da_matrici_precedenti.csv)")
-print(diff_prev); write_csv(diff_prev, file.path(DIR_DAT, "differenze_da_matrici_precedenti.csv"))
+if (file.exists(FILE_SLO) && file.exists(FILE_CRO)) {
+  diff_prev <- bind_rows(confronta(FILE_SLO, ";", "Slovenia"), confronta(FILE_CRO, ";", "Croatia"))
+  if (nrow(diff_prev) > 0) LOG("Differenze dai FILE DEFINITIVO: ", nrow(diff_prev),
+                               " celle (elenco in output_R/dati_derivati/differenze_da_matrici_precedenti.csv)")
+  print(diff_prev); write_csv(diff_prev, file.path(DIR_DAT, "differenze_da_matrici_precedenti.csv"))
+} else {
+  LOG("FILE DEFINITIVO non presenti: confronto con le vecchie matrici saltato (non serve per la tesi)")
+}
 
 esporta <- function(m, nome) {
   out <- tibble(Sample = rownames(m), Area = AREA_S[rownames(m)]) %>% bind_cols(as_tibble(m))
@@ -489,7 +528,7 @@ if (any(is.na(env$ELEV_mean) | is.na(env$NDVI_mean) | is.na(env$NDVI_sd))) {
 }
 if ("Protocol" %in% names(env)) LOG("Covariate ambientali: ", FILE_AMBIENTE, ", protocollo ",
                                     paste(unique(env$Protocol), collapse = ", "))
-grp  <- read_csv(FILE_GRUPPI, show_col_types = FALSE)
+grp  <- leggi_auto(FILE_GRUPPI)
 
 DF <- tibble(Sample = rownames(RRA), Area = unname(AREA_S[rownames(RRA)])) %>% bind_cols(as_tibble(RRA))
 DF$reads_final <- rowSums(CNT[DF$Sample, ]); DF$reads_prethreshold <- RES$den_pre[DF$Sample]
@@ -497,6 +536,9 @@ unisci <- function(x, y, nome) {
   mancano <- setdiff(x$Sample, y$Sample)
   if (length(mancano) > 0) stop("Campioni assenti da ", nome, ": ", paste(mancano, collapse = ", "))
   if (anyDuplicated(y$Sample)) stop("Campioni duplicati in ", nome)
+  extra <- setdiff(y$Sample, x$Sample)
+  if (length(extra) > 0) segnala("Campioni presenti nel file ", nome, " ma non analizzati (ignorati): ",
+                                 paste(extra, collapse = ", "))
   left_join(x, y, by = "Sample")
 }
 DF <- unisci(DF, ind %>% dplyr::select(Sample, Individual, Pack, GeneticSex, GenotypeQI), "individui")
@@ -877,6 +919,9 @@ salva <- function(p, nome, h_cm) {
   ggsave(file.path(PROJECT_DIR, paste0(nome, ".png")), p, width = 16, height = h_cm, units = "cm", dpi = 300)
   if (interactive()) print(p)                       # in RStudio: pannello Plots
   LOG("Figura salvata: ", nome, ".png (e .pdf in output_R/figure_pdf)")
+  # il grafico successivo deve essere costruito da capo: se la sua costruzione fallisce,
+  # salva() non trova 'p' invece di salvare di nuovo questo grafico con un altro nome
+  if (exists("p", envir = globalenv(), inherits = FALSE)) rm("p", envir = globalenv())
 }
 lab_area_n <- c(Slovenia = paste0("Slovenia (n = ", nA[["Slovenia"]], ")"),
                 Croatia = paste0("Croatia (n = ", nA[["Croatia"]], ")"))
@@ -961,6 +1006,52 @@ p <- pannello("FOO", "A  Frequency of occurrence", "Samples (%)") +
   (pannello("RRA", "B  Mean relative read abundance", "Mean RRA (%)") + theme(axis.text.y = element_blank())) +
   plot_layout(guides = "collect") & theme(legend.position = "bottom")
 salva(p, "Figura_Confronto_FOO_RRA", 8.6)
+
+# --- 12.3b FOO e RRA di ogni area (Figura_Dieta_Slovenia, Figura_Dieta_Croazia) --------
+# Una figura per area, usate nella tesi al posto della figura di confronto 12.3.
+# Categorie ordinate per RRA media, stessa scala orizzontale in tutti i pannelli delle
+# due figure; colori per tipo di categoria, uguali a quelli delle stesse categorie
+# nella figura della composizione dei campioni (ungulati selvatici in grigio).
+TIPO_LIV  <- c("Wild ungulates", "Taxa assigned to domestic livestock", "Caprinae (unresolved)",
+               "Cervinae (unresolved)", "Other taxa")
+TIPO_FILL <- setNames(c("#5a5a5a", "#7570b3", "#c51b7d", "#f3ebe1", "#4d9221"), TIPO_LIV)
+TIPO_EDGE <- setNames(c("#5a5a5a", "#7570b3", "#c51b7d", "#8c510a", "#4d9221"), TIPO_LIV)
+tipo_categoria <- function(x) dplyr::case_when(
+  x %in% c("Capreolus capreolus", "Cervus elaphus", "Sus scrofa", "Rupicapra rupicapra") ~ TIPO_LIV[1],
+  x %in% DOMESTIC ~ TIPO_LIV[2],
+  x == "Caprinae" ~ TIPO_LIV[3],
+  x == "Cervinae" ~ TIPO_LIV[4],
+  TRUE ~ TIPO_LIV[5])
+X_DIETA <- max(c(foo_rra$FOO, foo_rra$RRA)) * 1.18
+pannello_area <- function(d, m, titolo, asse) {
+  ggplot(d, aes(x = .data[[m]], y = category, fill = tipo, colour = tipo)) +
+    geom_col(width = 0.7, linewidth = 0.3) +
+    geom_text(aes(label = sprintf("%.1f", .data[[m]])), colour = "black", hjust = -0.2, size = 2.3) +
+    scale_fill_manual(values = TIPO_FILL) +
+    scale_colour_manual(values = TIPO_EDGE, guide = "none") +
+    scale_y_discrete(labels = lab_tax_expr) +
+    scale_x_continuous(expand = c(0, 0), limits = c(0, X_DIETA)) +
+    guides(fill = guide_legend(nrow = 2, byrow = TRUE,
+                               override.aes = list(colour = unname(TIPO_EDGE[levels(d$tipo)])))) +
+    labs(title = titolo, x = asse, y = NULL) + tema
+}
+figura_area <- function(a) {
+  d <- foo_rra %>% filter(Area == a, FOO > 0) %>% arrange(RRA, FOO)
+  d$category <- factor(d$category, levels = d$category)
+  d$tipo <- droplevels(factor(tipo_categoria(as.character(d$category)), levels = TIPO_LIV))
+  pannello_area(d, "FOO", "A  Frequency of occurrence", "Samples (%)") +
+    (pannello_area(d, "RRA", "B  Mean relative read abundance", "Mean RRA (%)") +
+       theme(axis.text.y = element_blank())) +
+    plot_layout(guides = "collect") & theme(legend.position = "bottom")
+}
+NOMI_DIETA <- c(Slovenia = "Figura_Dieta_Slovenia", Croatia = "Figura_Dieta_Croazia")
+for (a in AREE) {
+  n_cat <- sum(foo_rra$Area == a & foo_rra$FOO > 0)
+  # se qualcosa va storto: avviso nel log e figura mancante (segnalata anche da Overleaf),
+  # senza fermare lo script e la scrittura di numeri_risultati.tex
+  tryCatch(salva(figura_area(a), NOMI_DIETA[[a]], 2.8 + 0.45 * n_cat),
+           error = function(e) segnala("Figura ", NOMI_DIETA[[a]], " non creata: ", conditionMessage(e)))
+}
 
 # --- 12.4 composizione dei singoli campioni
 comp <- DF %>% dplyr::select(Sample, Study_area, all_of(CATS))
@@ -1295,7 +1386,7 @@ val_chr <- function(v) {
 chiavi <- tibble(key = names(K), value = vapply(K, function(v) val_chr(v[1]), character(1)))
 write_csv(chiavi, file.path(DIR_OUT, "risultati_chiave_R.csv"))
 
-spec <- read_csv(FILE_SPEC, show_col_types = FALSE, col_types = cols(.default = col_character()))
+spec <- leggi_auto(FILE_SPEC)
 migliaia <- function(x) formatC(round(x), format = "d", big.mark = ",")
 fmt_p <- function(p) ifelse(p < 0.0001, "<0.0001", ifelse(p < 0.01, sprintf("%.4f", p), sprintf("%.3f", p)))
 fmt_pe <- function(p) ifelse(p < 0.0001, "< 0.0001", paste("=", fmt_p(p)))
@@ -1334,8 +1425,21 @@ for (pk in c("vegan", "permute", "MASS", "ggplot2", "readr", "dplyr", "tidyr", "
   righe_tex <- c(righe_tex, sprintf("\\defres{ver.%s:str}{ %s}", pk, versione(pk)))
 }
 righe_tex <- c(righe_tex, sprintf("\\defres{ver.R:str}{%s}", as.character(getRversion())))
+n_macro_spec <- sum(grepl("^\\\\defres\\{", righe_tex) & !grepl("^\\\\defres\\{ver\\.", righe_tex))
+n_attese <- if (exists("spec") && is.data.frame(spec)) nrow(spec) else NA
+valido <- isTRUE(n_attese > 0) && isTRUE(n_macro_spec == n_attese) && length(mancano) == 0 && length(ERRORI) == 0
+if (!valido) {
+  righe_tex <- c(paste0("\\PackageError{numeri}{numeri_risultati.tex NON VALIDO: l'esecuzione di R ha avuto ",
+                        "errori o e' incompleta. Vedi output_R/log_esecuzione.txt e rilancia lo script con source()}{}"),
+                 righe_tex)
+}
 writeLines(righe_tex, file.path(PROJECT_DIR, OUT_TEX), useBytes = TRUE)
-LOG("Numeri della tesi scritti in ", OUT_TEX, " (da caricare su Overleaf)")
+if (valido) {
+  LOG("Numeri della tesi scritti in ", OUT_TEX, " (da caricare su Overleaf)")
+} else {
+  LOG("ATTENZIONE: ", OUT_TEX, " NON VALIDO (errori: ", length(ERRORI), "; macro scritte: ", n_macro_spec,
+      " su ", n_attese, "). Non caricarlo su Overleaf: correggi e rilancia con source().")
+}
 if (length(mancano) > 0) {
   segnala("Chiavi della specifica non calcolate (nella tesi comparirebbero come [?chiave?]): ", paste(mancano, collapse = ", "))
   writeLines(mancano, file.path(DIR_OUT, "chiavi_mancanti.txt"))
@@ -1395,4 +1499,11 @@ si <- capture.output(sessionInfo())
 writeLines(si, file.path(DIR_OUT, "sessionInfo.txt"))
 cat(si, sep = "\n")
 if (length(AVVISI) > 0) writeLines(AVVISI, file.path(DIR_OUT, "avvisi.txt"))
+if (length(ERRORI) > 0 || !exists("valido") || !isTRUE(valido)) {
+  LOG("ATTENZIONE: esecuzione NON valida (", length(ERRORI), " errori, righe 'ERRORE:' di questo log). ",
+      "Correggi il problema e rilancia con source(\"Script_Tesi_Lupo_COMPLETO.R\", encoding = \"UTF-8\").")
+} else {
+  LOG("Esecuzione completa, senza errori.")
+}
+options(error = NULL)
 LOG("Fine. Output in ", DIR_OUT)
