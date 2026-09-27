@@ -60,6 +60,9 @@
 #     torta si chiama ora Torte_campioni_102.csv; nuovo Torte_gruppi_4.csv
 #     (Slovenia, Zumberak group, Gorski Kotar, Southern Croatia) per la mappa
 #     con le torte.
+#   - Figura della sezione 2.9: Figura_NDVI_esempi, dai tre GeoTIFF esportati con
+#     GEE_NDVI_esempi_102.js (NDVI_HRV033_2022.tif, NDVI_MSV04C_2020.tif,
+#     NDVI_MSV17C_2020.tif, nella cartella di lavoro; serve il pacchetto terra).
 #   - Nuove figure della tesi (sezione 3.3): Figura_Dieta_Slovenia e
 #     Figura_Dieta_Croazia, una per area, al posto di Figura_Confronto_FOO_RRA
 #     (che viene ancora prodotta ma non e' piu' nella tesi).
@@ -1045,12 +1048,81 @@ figura_area <- function(a) {
     plot_layout(guides = "collect") & theme(legend.position = "bottom")
 }
 NOMI_DIETA <- c(Slovenia = "Figura_Dieta_Slovenia", Croatia = "Figura_Dieta_Croazia")
+# (la figura degli esempi di NDVI e' nella sezione 12.3c, dopo queste due)
 for (a in AREE) {
   n_cat <- sum(foo_rra$Area == a & foo_rra$FOO > 0)
   # se qualcosa va storto: avviso nel log e figura mancante (segnalata anche da Overleaf),
   # senza fermare lo script e la scrittura di numeri_risultati.tex
   tryCatch(salva(figura_area(a), NOMI_DIETA[[a]], 2.8 + 0.45 * n_cat),
            error = function(e) segnala("Figura ", NOMI_DIETA[[a]], " non creata: ", conditionMessage(e)))
+}
+
+# --- 12.3c esempi di NDVI attorno a tre buffer (Figura_NDVI_esempi, sezione 2.9) -------
+# Tre campioni scelti con una regola fissa: NDVI_sd minimo, mediano (il piu' basso dei
+# due valori centrali) e massimo. Servono i tre GeoTIFF esportati da GEE con
+# GEE_NDVI_esempi_102.js (nella cartella di lavoro) e il pacchetto terra; se mancano,
+# la figura viene saltata con una nota nel log, senza fermare lo script.
+NDVI_ESEMPI <- c(HRV033 = 2022, MSV04C = 2020, MSV17C = 2020)
+ord_sd <- DF$Sample[order(DF$NDVI_sd)]
+regola <- c(ord_sd[1], ord_sd[floor((length(ord_sd) + 1) / 2)], ord_sd[length(ord_sd)])
+if (!identical(regola, names(NDVI_ESEMPI))) {
+  segnala("Gli esempi di NDVI non seguono piu' la regola (minimo, mediano, massimo): ",
+          paste(regola, collapse = ", "), ". Aggiornare GEE_NDVI_esempi_102.js e NDVI_ESEMPI.")
+}
+file_tif <- paste0("NDVI_", names(NDVI_ESEMPI), "_", NDVI_ESEMPI, ".tif")
+if (!requireNamespace("terra", quietly = TRUE)) {
+  LOG("Figura NDVI saltata: manca il pacchetto terra (install.packages(\"terra\"))")
+} else if (!all(file.exists(file_tif))) {
+  LOG("Figura NDVI saltata: mancano ", paste(file_tif[!file.exists(file_tif)], collapse = ", "))
+} else {
+  tryCatch({
+    PAL_NDVI <- c("#f7fcf5", "#c7e9c0", "#74c476", "#238b45", "#00441b")
+    TITOLI_NDVI <- c("A  Lowest NDVI SD", "B  Median NDVI SD", "C  Highest NDVI SD")
+    pannelli_ndvi <- list()
+    for (k in seq_along(NDVI_ESEMPI)) {
+      s <- names(NDVI_ESEMPI)[k]
+      e <- DF[DF$Sample == s, ]
+      r <- terra::rast(file_tif[k])[[1]]
+      r <- terra::classify(r, cbind(-Inf, -1.5, NA))            # valore -9999 = nessun dato
+      pt <- terra::project(terra::vect(data.frame(x = e$Longitude, y = e$Latitude), geom = c("x", "y"),
+                                       crs = "EPSG:4326"), terra::crs(r))
+      bf <- terra::buffer(pt, width = 2000, quadsegs = 90)
+      v <- terra::extract(r, bf, ID = FALSE)[[1]]
+      v <- v[!is.na(v)]
+      LOG("NDVI dal GeoTIFF nel buffer di ", s, ": media ", sprintf("%.4f", mean(v)), ", DS ",
+          sprintf("%.4f", sd(v)), " (tabella: ", sprintf("%.4f", e$NDVI_mean), ", ",
+          sprintf("%.4f", e$NDVI_sd), "); pixel validi ", length(v))
+      if (abs(sd(v) - e$NDVI_sd) > 0.005 || abs(mean(v) - e$NDVI_mean) > 0.005) {
+        segnala("NDVI del GeoTIFF di ", s, " diverso dalla tabella: controllare l'esportazione da GEE")
+      }
+      df_r <- terra::as.data.frame(r, xy = TRUE, na.rm = FALSE)
+      names(df_r) <- c("x", "y", "ndvi")
+      cerchio <- as.data.frame(terra::geom(bf))[, c("x", "y")]
+      punto <- as.data.frame(terra::crds(pt))
+      ex <- as.vector(terra::ext(r))                             # xmin, xmax, ymin, ymax
+      pannelli_ndvi[[k]] <- ggplot() +
+        geom_raster(data = df_r, aes(x = x, y = y, fill = ndvi)) +
+        geom_path(data = cerchio, aes(x = x, y = y), colour = "black", linewidth = 0.4) +
+        geom_point(data = punto, aes(x = x, y = y), shape = 21, fill = "white", colour = "black", size = 1.3) +
+        annotate("segment", x = ex[1] + 300, xend = ex[1] + 1300, y = ex[3] + 300, yend = ex[3] + 300,
+                 linewidth = 0.8) +
+        annotate("text", x = ex[1] + 800, y = ex[3] + 330, label = "1 km", vjust = -0.6, size = 2.3) +
+        scale_fill_gradientn(colours = PAL_NDVI, limits = c(0, 1), oob = scales::squish,
+                             na.value = "grey80", name = "NDVI") +
+        coord_equal(expand = FALSE) +
+        labs(title = TITOLI_NDVI[k],
+             subtitle = sprintf("%s (%s, %d)\nNDVI SD %.3f, mean NDVI %.3f", s, as.character(e$Area), NDVI_ESEMPI[[k]],
+                                e$NDVI_sd, e$NDVI_mean)) +
+        theme_void(base_size = 8.5) +
+        theme(plot.title = element_text(face = "bold", size = 9),
+              plot.subtitle = element_text(size = 7.5, margin = margin(b = 3)),
+              legend.position = "bottom", legend.key.width = unit(1.2, "cm"),
+              legend.key.height = unit(0.25, "cm"), legend.title = element_text(size = 8, vjust = 0.9))
+    }
+    p <- pannelli_ndvi[[1]] + pannelli_ndvi[[2]] + pannelli_ndvi[[3]] +
+      plot_layout(nrow = 1, guides = "collect") & theme(legend.position = "bottom")
+    salva(p, "Figura_NDVI_esempi", 7.6)
+  }, error = function(e) segnala("Figura NDVI non creata: ", conditionMessage(e)))
 }
 
 # --- 12.4 composizione dei singoli campioni
