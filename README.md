@@ -1087,13 +1087,19 @@ if (!requireNamespace("terra", quietly = TRUE)) {
       pt <- terra::project(terra::vect(data.frame(x = e$Longitude, y = e$Latitude), geom = c("x", "y"),
                                        crs = "EPSG:4326"), terra::crs(r))
       bf <- terra::buffer(pt, width = 2000, quadsegs = 90)
+      # ritaglio a 450 m attorno al buffer: toglie le strisce senza dati al bordo dell'esportazione
+      eb <- as.vector(terra::ext(bf))                            # xmin, xmax, ymin, ymax del buffer
+      r <- terra::crop(r, terra::ext(eb[1] - 450, eb[2] + 450, eb[3] - 450, eb[4] + 450))
       v <- terra::extract(r, bf, ID = FALSE)[[1]]
       v <- v[!is.na(v)]
       LOG("NDVI dal GeoTIFF nel buffer di ", s, ": media ", sprintf("%.4f", mean(v)), ", DS ",
           sprintf("%.4f", sd(v)), " (tabella: ", sprintf("%.4f", e$NDVI_mean), ", ",
           sprintf("%.4f", e$NDVI_sd), "); pixel validi ", length(v))
-      if (abs(sd(v) - e$NDVI_sd) > 0.005 || abs(mean(v) - e$NDVI_mean) > 0.005) {
-        segnala("NDVI del GeoTIFF di ", s, " diverso dalla tabella: controllare l'esportazione da GEE")
+      # con il file giusto le differenze sono dell'ordine di 0.0001 (solo i pixel del bordo);
+      # il file vecchio (NDVI dalla mediana delle bande) differisce di 0.001-0.005
+      if (abs(sd(v) - e$NDVI_sd) > 0.001 || abs(mean(v) - e$NDVI_mean) > 0.001) {
+        segnala("NDVI del GeoTIFF di ", s, " diverso dalla tabella: probabilmente e' il file vecchio, ",
+                "riesportarlo con GEE_NDVI_esempi_102.js")
       }
       df_r <- terra::as.data.frame(r, xy = TRUE, na.rm = FALSE)
       names(df_r) <- c("x", "y", "ndvi")
