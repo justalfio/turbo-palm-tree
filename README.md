@@ -3,7 +3,7 @@
 # IN SLOVENIA AND CROATIA - SCRIPT UNICO DI ANALISI
 #
 # Alfio Tomarchio - Universita' di Bologna
-# Ultima revisione: 26 settembre 2026
+# Ultima revisione: 27 settembre 2026
 #
 # COME SI USA
 #   1. Metti questo script nella cartella "File definitivi", insieme ai file
@@ -27,11 +27,15 @@
 #     Slovenia wolves FILE DEFINITIVO.csv, Croatian wolves FILE DEFINITIVO.csv
 #         matrici finali: ora servono solo per il confronto con le matrici
 #         ricostruite (le differenze vanno in output_R/dati_derivati/)
-#     Wolf_NDVI_Dynamic_Dinaric.csv, individui_e_branchi_103_campioni.csv,
-#     Punti_103_per_QGIS.csv (separato da ";" oppure da ",")
+#     Punti_103_per_QGIS.csv (separato da ";" oppure da ","; la riga di
+#         HRV018 non viene usata)
+#   Nuovi (27/09/2026), senza HRV018 (separati da ";" oppure da ","):
+#     NDVI_quota_102_campioni.csv            quota e NDVI nel buffer di 2 km
+#     individui_e_branchi_102_campioni.csv   individui e branchi
 #   Nuovi (26/09/2026):
 #     assegnazioni_varianti.csv   assegnazione finale e ruolo di ogni variante
 #     gruppi_geografici_103.csv   aree di studio, gruppi, branchi e regioni
+#                                 (la riga di HRV018 non viene usata)
 #     specifica_macro.csv         elenco dei numeri citati nella tesi
 #   Facoltativi (se mancano, i relativi controlli vengono saltati):
 #     Punti_130_campionamento.csv, risultati_chiave_python.csv,
@@ -45,8 +49,13 @@
 #   - Tutti i numeri della tesi vengono scritti in numeri_risultati.tex.
 #   - Nei file delle torte: colonna CERVINAE in piu'.
 #   - HRV018 escluso dalle analisi ecologiche (lupo non confermato come autore
-#     della fatta): campioni analizzati 102 (52 sloveni, 50 croati). I nomi dei
-#     file con "103" restano invariati.
+#     della fatta): campioni analizzati 102 (52 sloveni, 50 croati).
+#   - 27/09/2026: quota e NDVI da NDVI_quota_102_campioni.csv (stessa procedura,
+#     102 campioni; maschera delle nuvole SCL + QA60 dove disponibile), individui
+#     e branchi da individui_e_branchi_102_campioni.csv; il file per le mappe a
+#     torta si chiama ora Torte_campioni_102.csv; nuovo Torte_gruppi_4.csv
+#     (Slovenia, Zumberak group, Gorski Kotar, Southern Croatia) per la mappa
+#     con le torte.
 #
 # SCELTE DOCUMENTATE (modificabili nel blocco di configurazione)
 #   - filtro di profondita' minima: 2.000 reads totali per campione nella
@@ -74,8 +83,8 @@ PROJECT_DIR <- getwd()          # la cartella "File definitivi"
 # --- file di ingresso: stessi nomi della versione precedente ------------------
 FILE_SLO       <- "Slovenia wolves FILE DEFINITIVO.csv"   # solo confronto
 FILE_CRO       <- "Croatian wolves FILE DEFINITIVO.csv"   # solo confronto
-FILE_AMBIENTE  <- "Wolf_NDVI_Dynamic_Dinaric.csv"
-FILE_INDIVIDUI <- "individui_e_branchi_103_campioni.csv"
+FILE_AMBIENTE  <- "NDVI_quota_102_campioni.csv"           # prima: Wolf_NDVI_Dynamic_Dinaric.csv
+FILE_INDIVIDUI <- "individui_e_branchi_102_campioni.csv"  # prima: individui_e_branchi_103_campioni.csv
 FILE_PUNTI     <- "Punti_103_per_QGIS.csv"
 FILE_COV_SLO   <- "Taxonomic_coverage_Slovenia.csv"       # tabella delle varianti
 FILE_COV_CRO   <- "Taxonomic_coverage_Croatia.csv"        # tabella delle varianti
@@ -473,7 +482,13 @@ ind  <- leggi_auto(FILE_INDIVIDUI)
 pts  <- leggi_auto(FILE_PUNTI) %>%
   mutate(Year = as.integer(Year), Latitude = numero(Latitude), Longitude = numero(Longitude))
 if (any(is.na(pts$Latitude) | is.na(pts$Longitude))) stop("Coordinate non leggibili in ", FILE_PUNTI)
-env  <- read_delim(FILE_AMBIENTE, delim = ";", locale = locale(decimal_mark = ","), show_col_types = FALSE)
+env  <- leggi_auto(FILE_AMBIENTE) %>%
+  mutate(ELEV_mean = numero(ELEV_mean), NDVI_mean = numero(NDVI_mean), NDVI_sd = numero(NDVI_sd))
+if (any(is.na(env$ELEV_mean) | is.na(env$NDVI_mean) | is.na(env$NDVI_sd))) {
+  stop("Valori di quota o NDVI non leggibili in ", FILE_AMBIENTE)
+}
+if ("Protocol" %in% names(env)) LOG("Covariate ambientali: ", FILE_AMBIENTE, ", protocollo ",
+                                    paste(unique(env$Protocol), collapse = ", "))
 grp  <- read_csv(FILE_GRUPPI, show_col_types = FALSE)
 
 DF <- tibble(Sample = rownames(RRA), Area = unname(AREA_S[rownames(RRA)])) %>% bind_cols(as_tibble(RRA))
@@ -515,7 +530,7 @@ DF$diet_type <- vapply(seq_along(det_list), function(i) {
   if (top %in% DOMESTIC) "Domestic livestock only" else paste(top, "only")
 }, character(1))
 DF$dominant <- CATS[max.col(as.matrix(DF[, CATS]), ties.method = "first")]
-write_csv(DF, file.path(DIR_DAT, "campioni_analitici_103.csv"))
+write_csv(DF, file.path(DIR_DAT, "campioni_analitici_102.csv"))
 
 nA <- table(DF$Area)
 put("n.slo", nA[["Slovenia"]]); put("n.cro", nA[["Croatia"]]); put("n.tot", nrow(DF))
@@ -1045,7 +1060,7 @@ p <- ggplot() +
   tema + theme(panel.grid.major.y = element_line(colour = "grey92"))
 salva(p, "HHH_Logistic_Plot_final", 8.2)
 
-# --- 12.9 modelli di dominanza (costanti di standardizzazione dei 103 campioni)
+# --- 12.9 modelli di dominanza (costanti di standardizzazione dei 102 campioni)
 ELEV_MU <- mean(DF$ELEV_mean); ELEV_SD <- sd(DF$ELEV_mean)
 curva <- function(m, dati) {
   g <- tibble(ELEV_mean = seq(min(dati$ELEV_mean), max(dati$ELEV_mean), length.out = 200)) %>%
@@ -1140,7 +1155,7 @@ torte_camp <- DFo %>% transmute(
   CHAMOIS = round(`Rupicapra rupicapra`, 3), CAPRINAE = round(Caprinae, 3),
   DOMESTIC = round(Bos + Capra + Ovis + `Ovis aries`, 3), LEPUS = round(Lepus, 3),
   CERVINAE = round(Cervinae, 3), NTAXA = n_assign)
-write_csv(torte_camp, file.path(PROJECT_DIR, "Torte_campioni_103.csv"))
+write_csv(torte_camp, file.path(PROJECT_DIR, "Torte_campioni_102.csv"))
 torte_aree <- DFo %>% group_by(Study = Study_area) %>%
   summarise(N = n(), N_IND = n_distinct(Individual[!is.na(Individual)]),
             ROE = round(mean(`Capreolus capreolus`), 2), RED = round(mean(`Cervus elaphus`), 2),
@@ -1152,6 +1167,24 @@ torte_aree <- DFo %>% group_by(Study = Study_area) %>%
             ROE, RED, BOAR, CHAMOIS, CAPRINAE, DOMESTIC, LEPUS, CERVINAE) %>%
   arrange(match(Study, c("Slovenia", "Northern Croatia", "Southern Croatia")))
 write_csv(torte_aree, file.path(PROJECT_DIR, "Torte_aree_3.csv"))
+
+# --- torte per QGIS: Slovenia e i tre gruppi croati (mappa con 4 torte) ------------
+# Stessi gruppi della tabella tab:within e della PERMANOVA fra gruppi croati.
+# Posizione della torta: mediana delle coordinate dei campioni del gruppo.
+torte_gruppi <- DFo %>%
+  mutate(Gruppo = if_else(Area == "Slovenia", "Slovenia", Group)) %>%
+  group_by(Gruppo) %>%
+  summarise(N = n(), Latitude = round(median(Latitude), 5), Longitude = round(median(Longitude), 5),
+            ROE = round(mean(`Capreolus capreolus`), 2), RED = round(mean(`Cervus elaphus`), 2),
+            CERVINAE = round(mean(Cervinae), 2), BOAR = round(mean(`Sus scrofa`), 2),
+            CHAMOIS = round(mean(`Rupicapra rupicapra`), 2), CAPRINAE = round(mean(Caprinae), 2),
+            DOMESTIC = round(mean(Bos + Capra + Ovis + `Ovis aries`), 2), LEPUS = round(mean(Lepus), 2),
+            .groups = "drop") %>%
+  mutate(Label = paste0(ricodifica(Gruppo, c("Zumberak group" = "\u017dumberak group")), " (n = ", N, ")")) %>%
+  arrange(match(Gruppo, c("Slovenia", "Zumberak group", "Gorski Kotar", "Southern Croatia"))) %>%
+  dplyr::select(Gruppo, Label, N, Latitude, Longitude, ROE, RED, CERVINAE, BOAR, CHAMOIS, CAPRINAE, DOMESTIC, LEPUS)
+if (nrow(torte_gruppi) != 4 || sum(torte_gruppi$N) != nrow(DFo)) segnala("Torte_gruppi_4.csv: gruppi inattesi")
+write_csv(torte_gruppi, file.path(PROJECT_DIR, "Torte_gruppi_4.csv"))
 
 # --- FOO e RRA per area di studio (Tabella_FOO_RRA_3aree.csv) --------------------
 AREE3 <- c("Slovenia", "Northern Croatia", "Southern Croatia")
