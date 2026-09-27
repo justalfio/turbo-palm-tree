@@ -970,7 +970,8 @@ p <- ggplot(comp_l, aes(x = Sample, y = rra, fill = key, colour = key)) +
   scale_y_continuous(expand = c(0, 0), breaks = seq(0, 100, 25)) +
   labs(x = "Samples, ordered by dominant prey category and its share", y = "Relative read abundance (%)") +
   tema + theme(axis.text.x = element_blank(), axis.ticks.x = element_blank(), axis.line.x = element_blank(),
-               panel.spacing = unit(0.3, "cm")) +
+               panel.spacing = unit(0.3, "cm"), strip.clip = "off",
+               plot.margin = margin(5.5, 12, 5.5, 5.5)) +
   guides(fill = guide_legend(nrow = 2, override.aes = list(colour = GRP$edge)))
 salva(p, "Figura_ComposizioneCampioni", 7.4)
 
