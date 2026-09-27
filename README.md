@@ -42,10 +42,11 @@
 #     soglia applicati dallo script, invece di partire dai FILE DEFINITIVO.
 #   - MSV136: ripristinati 45 reads di capriolo; 86 reads restano Cervinae non
 #     risolti (nuova categoria "Cervinae", solo in questo campione).
-#   - Numero minimo di prede distinte accanto al numero di categorie.
-#   - Analisi per individuo, errori standard robusti, modelli misti, analisi di
-#     sensibilita'; tutti i numeri della tesi in numeri_risultati.tex.
-#   - Nei file delle torte: colonne CERVINAE e NPREY_MIN in piu'.
+#   - Tutti i numeri della tesi vengono scritti in numeri_risultati.tex.
+#   - Nei file delle torte: colonna CERVINAE in piu'.
+#   - HRV018 escluso dalle analisi ecologiche (lupo non confermato come autore
+#     della fatta): campioni analizzati 102 (52 sloveni, 50 croati). I nomi dei
+#     file con "103" restano invariati.
 #
 # SCELTE DOCUMENTATE (modificabili nel blocco di configurazione)
 #   - filtro di profondita' minima: 2.000 reads totali per campione nella
@@ -56,18 +57,10 @@
 #     validate (variante Bovidae di 87 reads, esclusa).
 #   - soglia dell'1%: quota di ogni categoria sul totale delle prede valide
 #     del campione prima della soglia; si azzerano le quote strettamente < 1%;
-#     un solo denominatore, nessuna iterazione; poi RRA ricalcolata. Analisi di
-#     sensibilita' con una soglia comune del 5%, perche' la tabella croata era
-#     gia' filtrata al 5% per campione e quella slovena no.
-#   - categorie annidate (Cervinae > Cervus elaphus; Caprinae > Rupicapra,
-#     Ovis, Capra; Ovis > Ovis aries): restano distinte nelle matrici; il
-#     numero minimo di prede distinte non conta la categoria superiore quando
-#     e' presente una sua categoria inclusa.
-#   - dipendenza fra campioni dello stesso individuo: analisi a livello di
-#     individuo (profili medi) per PERMANOVA, betadisper e RDA; errori
-#     standard robusti per individuo (sandwich::vcovCL) per i modelli
-#     logistici; GLMM con intercetta casuale per individuo (lme4::glmer) per
-#     il modello sulla dieta mista.
+#     un solo denominatore, nessuna iterazione; poi RRA ricalcolata.
+#   - categorie di assegnazione (specie, genere o sottofamiglia): Cervinae e
+#     Caprinae restano categorie distinte; un campione e' "misto" quando
+#     contiene piu' di una categoria.
 # ==============================================================================
 
 
@@ -107,13 +100,17 @@ DIR_DAT  <- file.path(DIR_OUT, "dati_derivati")
 
 MIN_READS   <- 2000        # filtro di profondita' minima (reads totali)
 SOGLIA      <- 0.01        # soglia campione-specifica dell'1%
+# Campioni in cui il lupo non e' confermato come autore della fatta: esclusi da
+# tutte le analisi ecologiche e riportati solo tra i risultati genetici.
+# HRV018: molte reads di volpe, genotipo di lupo non affidabile (non e' lupo al 100%).
+DEPOSITORE_NON_CONFERMATO <- c("HRV018")
 N_PERM      <- 9999        # permutazioni per tutti i test
 SEED        <- 20260926    # seme unico; ogni test lo reimposta prima di partire
 VARIANTE_BOVIDAE_87 <- "3833:11173"   # variante non validata (sensibilita')
 VARIANTE_CERVINAE_CRO <- "21331:1117" # variante croata risolta a Cervus elaphus (sensibilita')
 
 pacchetti <- c("dplyr", "tidyr", "readr", "ggplot2", "vegan", "permute",
-               "MASS", "sandwich", "lme4", "patchwork", "ggrepel")
+               "MASS", "patchwork", "ggrepel")
 mancanti <- pacchetti[!vapply(pacchetti, requireNamespace, logical(1), quietly = TRUE)]
 if (length(mancanti) > 0) {
   stop("Pacchetti mancanti: ", paste(mancanti, collapse = ", "),
@@ -123,7 +120,7 @@ if (length(mancanti) > 0) {
 # comunque il prefisso del pacchetto dove c'e' ambiguita'.
 suppressPackageStartupMessages({
   library(MASS); library(dplyr); library(tidyr); library(readr); library(ggplot2)
-  library(vegan); library(permute); library(sandwich); library(lme4)
+  library(vegan); library(permute)
   library(patchwork); library(ggrepel)
 })
 if (getRversion() < "4.4.0") {
@@ -307,6 +304,7 @@ pipeline <- function(lungo, prede_extra = character(0), cervinae_cro_irrisolti =
     pass_depth_noCanisVulpes = (total_reads - predator - non_target_carnivore) >= MIN_READS,
     status = case_when(!pass_depth_total ~ "Below 2,000 total reads",
                        prey == 0 ~ "No valid prey reads",
+                       Sample %in% DEPOSITORE_NON_CONFERMATO ~ "Wolf not confirmed as depositor",
                        TRUE ~ "Analysed"))
   inclusi <- tot$Sample[tot$status == "Analysed"]
   c0 <- l %>% filter(role == "prey", Sample %in% inclusi) %>%
@@ -369,7 +367,7 @@ flusso$flag <- ""
 flusso$flag[flusso$status == "Analysed" & flusso$non_target_carnivore > 0] <-
   "Non-target carnivore reads present (excluded from denominator)"
 flusso$flag[flusso$Sample == "HRV018"] <-
-  "Abundant Vulpes vulpes reads; retained in the main analysis, excluded in a sensitivity analysis"
+  "Abundant Vulpes vulpes reads, wolf not confirmed as depositor: excluded from the dietary analyses"
 write_csv(flusso, file.path(DIR_DAT, "flusso_campioni.csv"))
 riep_flusso <- flusso %>% count(Area, status) %>% pivot_wider(names_from = status, values_from = n, values_fill = 0)
 print(riep_flusso); write_csv(riep_flusso, file.path(DIR_DAT, "flusso_campioni_riepilogo.csv"))
@@ -391,9 +389,12 @@ confronta <- function(file, sep, area) {
   prev <- as.data.frame(prev); rownames(prev) <- prev$scientific_name
   samp <- setdiff(names(prev), c("scientific_name", "rank"))
   nuovi <- names(AREA_S)[AREA_S == area]
-  if (!setequal(samp, nuovi)) segnala("Insieme di campioni diverso dalla matrice precedente: ", area)
+  solo_prima <- setdiff(samp, nuovi)
+  if (length(solo_prima) > 0) LOG("Campioni della matrice precedente non analizzati ora (", area, "): ",
+                                  paste(solo_prima, collapse = ", "), " (lupo non confermato come autore)")
+  if (length(setdiff(nuovi, samp)) > 0) segnala("Campioni analizzati assenti dalla matrice precedente: ", area)
   diff <- list()
-  for (t in union(rownames(prev), CATS)) for (s in samp) {
+  for (t in union(rownames(prev), CATS)) for (s in intersect(samp, nuovi)) {
     a <- if (t %in% rownames(prev)) as.integer(prev[t, s]) else 0L
     b <- if (t %in% CATS) as.integer(CNT[s, t]) else 0L
     if (a != b) diff[[length(diff) + 1]] <- tibble(Area = area, Sample = s, category = t, previous = a, new = b)
@@ -430,6 +431,7 @@ for (a in AREE) {
   put(paste0("flow.withreads.", ab(a)), nrow(t))
   put(paste0("flow.below2000.", ab(a)), sum(t$status == "Below 2,000 total reads"))
   put(paste0("flow.noprey.", ab(a)), sum(t$status == "No valid prey reads"))
+  put(paste0("flow.notwolf.", ab(a)), sum(t$status == "Wolf not confirmed as depositor"))
   put(paste0("reads.run.", ab(a)), sum(t$total_reads))
   put(paste0("reads.predator.", ab(a)), sum(t$predator))
   put(paste0("reads.fox.", ab(a)), sum(t$non_target_carnivore))
@@ -505,10 +507,10 @@ lca <- function(det) {
 det_list <- lapply(seq_len(nrow(DF)), function(i) CATS[as.numeric(unlist(DF[i, CATS])) > 0])
 DF$n_assign <- vapply(det_list, length, integer(1))
 DF$n_prey_min <- vapply(det_list, n_prey_min, integer(1))
-DF$mixed_prey <- as.integer(DF$n_prey_min >= 2)
+DF$mixed_prey <- as.integer(DF$n_assign >= 2)   # misto: piu' di una categoria
 DF$mixed_assign <- as.integer(DF$n_assign >= 2)
 DF$diet_type <- vapply(seq_along(det_list), function(i) {
-  if (DF$n_prey_min[i] >= 2) return("Mixed (more than one prey taxon)")
+  if (DF$n_assign[i] >= 2) return("Mixed (more than one prey taxon)")
   top <- lca(det_list[[i]])
   if (top %in% DOMESTIC) "Domestic livestock only" else paste(top, "only")
 }, character(1))
@@ -592,8 +594,8 @@ for (a in c(AREE, "Total")) {
     put(paste0("nprey.", v, ".", k), sum(s$n_prey_min == v))
   }
   put(paste0("mix.prey.", k), sum(s$mixed_prey)); put(paste0("mix.assign.", k), sum(s$mixed_assign))
-  put(paste0("single.prey.", k), sum(s$n_prey_min == 1)); put(paste0("single.assign.", k), sum(s$n_assign == 1))
-  put(paste0("single.prey.pct.", k), 100 * mean(s$n_prey_min == 1))
+  put(paste0("single.prey.", k), sum(s$n_assign == 1)); put(paste0("single.assign.", k), sum(s$n_assign == 1))
+  put(paste0("single.prey.pct.", k), 100 * mean(s$n_assign == 1))
   put(paste0("nassign.max.", k), max(s$n_assign)); put(paste0("nprey.max.", k), max(s$n_prey_min))
   put(paste0("nassign.mean.", k), mean(s$n_assign)); put(paste0("nprey.mean.", k), mean(s$n_prey_min))
 }
@@ -614,7 +616,7 @@ for (i in seq_len(nrow(tipi))) for (a in AREE) {
 foglie <- function(det) { anc <- unique(unlist(lapply(det, antenati))); det[!det %in% anc] }
 mx <- DF[DF$mixed_prey == 1, ]
 minore <- vapply(seq_len(nrow(mx)), function(i) {
-  det <- CATS[as.numeric(unlist(mx[i, CATS])) > 0]; min(as.numeric(unlist(mx[i, foglie(det)]))) }, numeric(1))
+  det <- CATS[as.numeric(unlist(mx[i, CATS])) > 0]; min(as.numeric(unlist(mx[i, det]))) }, numeric(1))
 put("mix.minor.median", median(minore)); put("mix.minor.min", min(minore))
 put("mix.minor.max", max(minore)); put("mix.minor.below10", sum(minore < 10))
 for (a in AREE) {
@@ -703,31 +705,13 @@ put("pcoa.maxstack", max(pos_tab$n))
 pc_all <- cmdscale(DM, k = length(eigpos), eig = TRUE)
 put("pcoa.positions.allaxes", nrow(unique(round(pc_all$points, 8))))
 
-# --- 7.5 dipendenza: analisi a livello di individuo (profilo medio per individuo)
-IND <- DF %>% group_by(cluster_id) %>%
-  summarise(Area = first(Area), across(all_of(CATS), mean),
-            ELEV_mean = mean(ELEV_mean), NDVI_mean = mean(NDVI_mean), NDVI_sd = mean(NDVI_sd), .groups = "drop")
-put("ind.n", nrow(IND)); put("ind.n.slo", sum(IND$Area == "Slovenia")); put("ind.n.cro", sum(IND$Area == "Croatia"))
-DMi <- vegdist(decostand(as.matrix(IND[, CATS]), "hellinger"), "bray")
-set.seed(SEED)
-permi <- adonis2(DMi ~ Area, data = IND, permutations = how(nperm = N_PERM), by = "terms")
-print(permi)
-put("ind.perm.R2", permi$R2[1]); put("ind.perm.F", permi$F[1]); put("ind.perm.p", permi$`Pr(>F)`[1]); put("ind.perm.df2", permi$Df[2])
-bdi <- suppressWarnings(betadisper(DMi, group = IND$Area, type = "median"))
-set.seed(SEED)
-bdit <- permutest(bdi, permutations = how(nperm = N_PERM))
-put("ind.bd.F", bdit$tab$F[1]); put("ind.bd.p", bdit$tab$`Pr(>F)`[1])
-put("ind.bd.dist.slo", bdi$group.distances[["Slovenia"]]); put("ind.bd.dist.cro", bdi$group.distances[["Croatia"]])
-
 
 # ==============================================================================
 # 8. MODELLI LOGISTICI
 #    Coefficienti, IC 95% da profilo di verosimiglianza, p di Wald (summary).
-#    Dipendenza: errori robusti per individuo (vcovCL, HC0, correzione G/(G-1))
-#    e, per la dieta mista, GLMM con intercetta casuale per individuo.
 # ==============================================================================
 Z975 <- qnorm(0.975)
-blocco_glm <- function(prefix, formula, dati, termine, cluster = NULL, glmm = FALSE) {
+blocco_glm <- function(prefix, formula, dati, termine) {
   m <- glm(formula, data = dati, family = binomial(link = "logit"))
   co <- summary(m)$coefficients
   ci <- suppressMessages(confint(m))
@@ -741,36 +725,10 @@ blocco_glm <- function(prefix, formula, dati, termine, cluster = NULL, glmm = FA
     }
   }
   put(paste0(prefix, ".n"), nrow(dati)); put(paste0(prefix, ".events"), sum(m$y))
-  if (!is.null(cluster)) {
-    V <- sandwich::vcovCL(m, cluster = cluster, type = "HC0")
-    se <- sqrt(diag(V))[termine]; b <- coef(m)[termine]
-    put(paste0(prefix, ".cr.se"), se); put(paste0(prefix, ".cr.p"), 2 * pnorm(-abs(b / se)))
-    put(paste0(prefix, ".cr.OR_lo"), exp(b - Z975 * se)); put(paste0(prefix, ".cr.OR_hi"), exp(b + Z975 * se))
-    put(paste0(prefix, ".cr.G"), length(unique(cluster)))
-    g <- tapply(m$y, cluster, function(v) c(length(v), sum(v)))
-    g <- do.call(rbind, g); rep <- g[g[, 1] > 1, , drop = FALSE]
-    put(paste0(prefix, ".rep.ind"), nrow(rep)); put(paste0(prefix, ".rep.discordant"), sum(rep[, 2] > 0 & rep[, 2] < rep[, 1]))
-  }
-  if (glmm) {
-    dati$cluster_id_glmm <- cluster
-    f2 <- update(formula, . ~ . + (1 | cluster_id_glmm))
-    mm <- tryCatch(withCallingHandlers(
-      glmer(f2, data = dati, family = binomial, control = glmerControl(optimizer = "bobyqa")),
-      warning = function(w) { LOG("glmer ", prefix, ": ", conditionMessage(w)); invokeRestart("muffleWarning") }),
-      error = function(e) { LOG("glmer ", prefix, " non stimabile: ", conditionMessage(e)); NULL })
-    if (!is.null(mm)) {
-      b <- fixef(mm)[termine]; se <- sqrt(diag(as.matrix(vcov(mm))))[which(names(fixef(mm)) == termine)]
-      put(paste0(prefix, ".glmm.OR"), exp(b)); put(paste0(prefix, ".glmm.OR_lo"), exp(b - Z975 * se))
-      put(paste0(prefix, ".glmm.OR_hi"), exp(b + Z975 * se)); put(paste0(prefix, ".glmm.p"), 2 * pnorm(-abs(b / se)))
-      put(paste0(prefix, ".glmm.sigma"), attr(VarCorr(mm)$cluster_id_glmm, "stddev")[[1]])
-      put(paste0(prefix, ".glmm.singular"), isSingular(mm)); put(paste0(prefix, ".glmm.nclusters"), length(unique(cluster)))
-    }
-  }
   m
 }
 
-m_hhh <- blocco_glm("hhh", mixed_prey ~ NDVI_sd_z + ELEV_mean_z + Croatia, DF, "NDVI_sd_z",
-                    cluster = DF$cluster_id, glmm = TRUE)
+m_hhh <- blocco_glm("hhh", mixed_prey ~ NDVI_sd_z + ELEV_mean_z + Croatia, DF, "NDVI_sd_z")
 print(summary(m_hhh))
 # modello con interazione stimato esplicitamente (update() rivaluterebbe la
 # chiamata fuori dalla funzione blocco_glm)
@@ -778,20 +736,18 @@ m_hhh0 <- glm(mixed_prey ~ NDVI_sd_z + ELEV_mean_z + Croatia, data = DF, family 
 m_int  <- glm(mixed_prey ~ NDVI_sd_z + ELEV_mean_z + Croatia + NDVI_sd_z:Croatia, data = DF, family = binomial)
 lr <- anova(m_hhh0, m_int, test = "Chisq")
 put("hhh.int.chi", lr$Deviance[2]); put("hhh.int.p", lr$`Pr(>Chi)`[2])
-m_hhha <- blocco_glm("hhha", mixed_assign ~ NDVI_sd_z + ELEV_mean_z + Croatia, DF, "NDVI_sd_z",
-                     cluster = DF$cluster_id, glmm = TRUE)
 
 TRE <- c("Cervus elaphus", "Capreolus capreolus", "Sus scrofa")
 DOM <- DF[rowSums(DF[, TRE] > 0) > 0, ]
 DOM$dom3 <- TRE[max.col(as.matrix(DOM[, TRE]), ties.method = "first")]
 DOM$boar <- as.integer(DOM$dom3 == "Sus scrofa")
 put("dom.n", nrow(DOM)); for (c in TRE) put(paste0("dom.", CODE[[c]]), sum(DOM$dom3 == c))
-m_l1 <- blocco_glm("l1", boar ~ ELEV_mean_z + NDVI_mean_z, DOM, "ELEV_mean_z", cluster = DOM$cluster_id, glmm = TRUE)
+m_l1 <- blocco_glm("l1", boar ~ ELEV_mean_z + NDVI_mean_z, DOM, "ELEV_mean_z")
 print(summary(m_l1))
 blocco_glm("l1.no2", boar ~ ELEV_mean_z + NDVI_mean_z, DOM[!DOM$Sample %in% c("HRV027", "HRV05X"), ], "ELEV_mean_z")
 blocco_glm("l1.cro", boar ~ ELEV_mean_z + NDVI_mean_z, DOM[DOM$Area == "Croatia", ], "ELEV_mean_z")
 CERV <- DOM[DOM$dom3 != "Sus scrofa", ]; CERV$red <- as.integer(CERV$dom3 == "Cervus elaphus")
-m_l2 <- blocco_glm("l2", red ~ ELEV_mean_z + NDVI_mean_z, CERV, "ELEV_mean_z", cluster = CERV$cluster_id, glmm = TRUE)
+m_l2 <- blocco_glm("l2", red ~ ELEV_mean_z + NDVI_mean_z, CERV, "ELEV_mean_z")
 print(summary(m_l2))
 low <- DOM[order(DOM$ELEV_mean), ][1:3, ]
 put("l1.lowest", paste(sprintf("%s %.0f m %s", low$Sample, low$ELEV_mean, low$dom3), collapse = "; "))
@@ -820,19 +776,6 @@ for (t in c("ELEV_mean", "NDVI_mean", "NDVI_sd")) {
 }
 v <- vif.cca(m_rda); for (t in names(v)) put(paste0("rda.vif.", t), v[[t]])
 put("rda.ncat", length(RDA_CATS))
-# livello di individuo: profilo e covariate medi per individuo
-RDi <- as.data.frame(IND[, CATS]); RDi$Domestic <- rowSums(RDi[, DOMESTIC])
-Yi <- decostand(as.matrix(RDi[, RDA_CATS]), "hellinger")
-Xi <- as.data.frame(IND[, c("ELEV_mean", "NDVI_mean", "NDVI_sd")])
-m_rdai <- rda(Yi ~ ELEV_mean + NDVI_mean + NDVI_sd, data = Xi)
-set.seed(SEED); a_rdai <- anova(m_rdai, permutations = how(nperm = N_PERM))
-set.seed(SEED); a_mari <- anova(m_rdai, by = "margin", permutations = how(nperm = N_PERM))
-r2i <- RsquareAdj(m_rdai)
-put("ind.rda.R2", r2i$r.squared); put("ind.rda.R2adj", r2i$adj.r.squared)
-put("ind.rda.F", a_rdai$F[1]); put("ind.rda.p", a_rdai$`Pr(>F)`[1]); put("ind.rda.df2", a_rdai$Df[2])
-for (t in c("ELEV_mean", "NDVI_mean", "NDVI_sd")) {
-  put(paste0("ind.rda.m.", t, ".F"), a_mari[t, "F"]); put(paste0("ind.rda.m.", t, ".p"), a_mari[t, "Pr(>F)"])
-}
 
 
 # ==============================================================================
@@ -876,75 +819,8 @@ put("grp.slo.perm.df1", pgs$Df[1]); put("grp.slo.perm.df2", pgs$Df[2]); put("grp
 
 
 # ==============================================================================
-# 11. ANALISI DI SENSIBILITA'
-#   main        analisi principale (riferimento)
-#   hrv018      HRV018 escluso (campione con abbondante DNA di volpe)
-#   crocervinae variante croata Cervinae lasciata non risolta
-#   bovidae87   variante Bovidae di 87 reads trattenuta come Bovidae non risolto
-#   collapsed   categorie annidate unite nella categoria superiore (gruppi esclusivi)
-#   thr5        soglia comune del 5% al posto dell'1% (pavimento di rilevamento
-#               uguale nelle due tabelle)
+# 11. DETTAGLI USATI NEL TESTO
 # ==============================================================================
-SENS <- list()
-sens <- function(tag, dati, cats, parent = PARENT) {
-  dm <- vegdist(decostand(as.matrix(dati[, cats]), "hellinger"), "bray")
-  set.seed(SEED); p <- adonis2(dm ~ Area, data = dati, permutations = how(nperm = N_PERM))
-  P_ <- dati %>% group_by(Area) %>% summarise(across(all_of(cats), mean), .groups = "drop")
-  Pm_ <- as.matrix(P_[, cats]); rownames(Pm_) <- as.character(P_$Area)
-  ant <- function(c) { a <- character(0); while (c %in% names(parent)) { c <- parent[[c]]; a <- c(a, c) }; a }
-  npm <- vapply(seq_len(nrow(dati)), function(i) {
-    det <- cats[as.numeric(unlist(dati[i, cats])) > 0]; anc <- unique(unlist(lapply(det, ant))); sum(!det %in% anc) }, integer(1))
-  dati$mixed_s <- as.integer(npm >= 2)
-  m <- glm(mixed_s ~ NDVI_sd_z + ELEV_mean_z + Croatia, data = dati, family = binomial)
-  ci <- suppressMessages(confint(m))
-  cro <- dati[dati$Area == "Croatia", ]
-  r <- list(n_slo = sum(dati$Area == "Slovenia"), n_cro = sum(dati$Area == "Croatia"), n_cat = length(cats),
-            perm_R2 = p$R2[1], perm_F = p$F[1], perm_p = p$`Pr(>F)`[1],
-            BA_slo = levins(Pm_["Slovenia", ], length(cats))[["BA"]],
-            BA_cro = levins(Pm_["Croatia", ], length(cats))[["BA"]],
-            pianka = pianka(Pm_["Slovenia", ], Pm_["Croatia", ]), mixed = sum(dati$mixed_s),
-            hhh_OR = exp(coef(m)[["NDVI_sd_z"]]), hhh_lo = exp(ci["NDVI_sd_z", 1]), hhh_hi = exp(ci["NDVI_sd_z", 2]),
-            hhh_p = summary(m)$coefficients["NDVI_sd_z", "Pr(>|z|)"],
-            foo_cro_cerela = if ("Cervus elaphus" %in% cats) 100 * mean(cro$`Cervus elaphus` > 0) else NA_real_,
-            rra_cro_cerela = if ("Cervus elaphus" %in% cats) mean(cro$`Cervus elaphus`) else NA_real_)
-  for (k in names(r)) put(paste0("sens.", tag, ".", k), r[[k]])
-  SENS[[tag]] <<- c(tag = tag, r)
-}
-covar <- DF %>% dplyr::select(Sample, Area, NDVI_sd_z, ELEV_mean_z, Croatia)
-sens("main", DF, CATS)
-DFh <- DF[DF$Sample != "HRV018", ] %>%
-  mutate(ELEV_mean_z = as.numeric(scale(ELEV_mean)), NDVI_sd_z = as.numeric(scale(NDVI_sd)),
-         NDVI_mean_z = as.numeric(scale(NDVI_mean)))
-sens("hrv018", DFh, CATS)
-RES_b <- pipeline(LUNGO, cervinae_cro_irrisolti = TRUE)
-DFb <- covar %>% left_join(tibble(Sample = rownames(RES_b$rra)) %>% bind_cols(as_tibble(riorder(RES_b$rra, CATS))), by = "Sample")
-sens("crocervinae", DFb, CATS)
-elenco_e <- function(x) if (length(x) <= 1) paste(x, collapse = "") else
-  paste(paste(x[-length(x)], collapse = ", "), "and", x[length(x)])
-put("sens.crocervinae.samples", elenco_e(DFb$Sample[DFb$Area == "Croatia" & DFb$Cervinae > 0]))
-RES_c <- pipeline(LUNGO, prede_extra = VARIANTE_BOVIDAE_87)
-cats_c <- c(CATS, "Bovidae")
-DFc <- covar %>% left_join(tibble(Sample = rownames(RES_c$rra)) %>% bind_cols(as_tibble(riorder(RES_c$rra, cats_c))), by = "Sample")
-sens("bovidae87", DFc, cats_c, parent = c(PARENT, "Caprinae" = "Bovidae", "Bos" = "Bovidae"))
-put("sens.bovidae87.msv17c", DFc$Bovidae[DFc$Sample == "MSV17C"])
-put("sens.bovidae87.msv0l8", 100 * RES_c$counts_pre["MSV0L8", "Bovidae"] / sum(RES_c$counts_pre["MSV0L8", ]))
-DFd <- covar %>% bind_cols(as_tibble(collassa(as.matrix(DF[, CATS]))))
-sens("collapsed", DFd, ROOTS, parent = character(0))
-RES_5 <- pipeline(LUNGO, soglia = 0.05)
-stopifnot(setequal(rownames(RES_5$rra), DF$Sample))
-cats_5 <- intersect(CATS, colnames(RES_5$rra))
-DF5 <- covar %>% left_join(tibble(Sample = rownames(RES_5$rra)) %>% bind_cols(as_tibble(riorder(RES_5$rra, CATS))), by = "Sample")
-sens("thr5", DF5, cats_5)
-for (a in AREE) {
-  put(paste0("sens.thr5.removed.", ab(a)), sum(RES_5$removed$Sample %in% names(RES_5$area)[RES_5$area == a]))
-  npm5 <- vapply(which(DF5$Area == a), function(i) n_prey_min(CATS[as.numeric(unlist(DF5[i, CATS])) > 0]), integer(1))
-  put(paste0("sens.thr5.mixed.", ab(a)), sum(npm5 >= 2))
-}
-put("sens.assign.mixed", sum(DF$mixed_assign))
-SENS_T <- bind_rows(lapply(SENS, as_tibble))
-print(SENS_T, width = Inf); write_csv(SENS_T, file.path(DIR_TAB, "analisi_sensibilita.csv"))
-
-# dettagli usati nel testo
 cap <- DF[DF$Caprinae > 0, ]
 put("caprinae.samples", paste(sprintf("%s %s %s %s", cap$Sample, cap$Group, cap$Individual, cap$Date), collapse = "; "))
 cham <- DF[DF$`Rupicapra rupicapra` > 0, ]
@@ -997,26 +873,40 @@ FAM <- c("Cervus elaphus" = "Cervidae", "Capreolus capreolus" = "Cervidae", "Cer
          "Vulpes vulpes" = "Canidae", "Gallus gallus" = "Phasianidae", "Lepus" = "Leporidae",
          "Laurasiatheria" = "Not assigned to a family", "Eukaryota" = "Not assigned to a family")
 ORD_FAM <- c("Cervidae", "Bovidae", "Suidae", "Canidae", "Leporidae", "Phasianidae", "Not assigned to a family")
-COL_FAM <- c("Cervidae" = "#8c510a", "Bovidae" = "#c51b7d", "Suidae" = "#4a3aa7", "Canidae" = "#9a9a9a",
-             "Leporidae" = "#4d9221", "Phasianidae" = "#eda100", "Not assigned to a family" = "#d9d9d9")
-fam_tab <- LUNGO %>% filter(role != "predator") %>% mutate(family = unname(FAM[final_name])) %>%
-  group_by(Area, family) %>% summarise(reads = sum(reads), .groups = "drop") %>%
+COL_FAMIGLIE <- c("Cervidae" = "#882255", "Bovidae" = "#999933", "Suidae" = "#4a3aa7", "Canidae" = "#e87ba4",
+                  "Leporidae" = "#4d9221", "Phasianidae" = "#d95f02", "Not assigned to family" = "#9a9a9a")
+ORDINE_FAMIGLIE <- names(COL_FAMIGLIE)
+coverage_fam <- LUNGO %>% filter(role != "predator") %>%
+  mutate(Famiglia = unname(FAM[final_name]),
+         Famiglia = if_else(Famiglia == "Not assigned to a family", "Not assigned to family", Famiglia)) %>%
+  group_by(Area, Famiglia) %>% summarise(reads = sum(reads), .groups = "drop") %>%
+  filter(reads > 0) %>%
   group_by(Area) %>% mutate(pct = 100 * reads / sum(reads), tot = sum(reads)) %>% ungroup() %>%
-  mutate(family = factor(family, levels = rev(ORD_FAM)),
-         Area_lab = paste0(Area, "\n(", format(tot, big.mark = ","), " reads)"))
-stopifnot(!any(is.na(fam_tab$family)))
-write_csv(fam_tab, file.path(DIR_TAB, "copertura_tassonomica_famiglie.csv"))
-fam_tab$Area_lab <- factor(fam_tab$Area_lab, levels = rev(unique(fam_tab$Area_lab[order(match(fam_tab$Area, AREE))])))
-p <- ggplot(fam_tab, aes(x = pct, y = Area_lab, fill = family)) +
-  geom_col(width = 0.62, colour = "white", linewidth = 0.3) +
-  geom_text(aes(label = ifelse(pct >= 5, sprintf("%.1f%%", pct), "")), position = position_stack(vjust = 0.5),
-            size = 2.6, colour = ifelse(fam_tab$family %in% c("Canidae", "Phasianidae", "Not assigned to a family"), "black", "white")) +
-  scale_fill_manual(values = COL_FAM, breaks = ORD_FAM,
-                    labels = c(ORD_FAM[1:3], expression(Canidae~(italic("Vulpes vulpes"))), ORD_FAM[5:7])) +
-  scale_x_continuous(expand = c(0, 0), limits = c(0, 100.01)) +
-  labs(x = "Share of the reads of the run (%)", y = NULL) + tema +
-  guides(fill = guide_legend(nrow = 2))
-salva(p, "Figura_TaxonomicCoverage", 5.6)
+  mutate(Area = factor(Area, levels = AREE), Famiglia = factor(Famiglia, levels = ORDINE_FAMIGLIE))
+stopifnot(!any(is.na(coverage_fam$Famiglia)))
+write_csv(coverage_fam, file.path(DIR_TAB, "copertura_tassonomica_famiglie.csv"))
+tot_cov <- coverage_fam %>% distinct(Area, tot)
+etichette_cov <- setNames(paste0(tot_cov$Area, "\n", formatC(tot_cov$tot, format = "d", big.mark = ","), " reads"),
+                          as.character(tot_cov$Area))
+fig_coverage <- ggplot(coverage_fam, aes(x = 1, y = pct, fill = Famiglia)) +
+  geom_col(width = 1, colour = "white", linewidth = 0.6) +
+  geom_text(aes(label = ifelse(pct >= 3, sprintf("%.1f%%", pct), "")),
+            position = position_stack(vjust = 0.5), colour = "white", fontface = "bold", size = 3.6) +
+  coord_polar(theta = "y", direction = -1) +
+  facet_wrap(~ Area, labeller = labeller(Area = etichette_cov)) +
+  scale_fill_manual(values = COL_FAMIGLIE, breaks = ORDINE_FAMIGLIE, drop = TRUE) +
+  labs(title = "Taxonomic coverage of the unfiltered sequence data",
+       subtitle = paste("Share of sequence reads by family, all sequenced samples;",
+                        "slices below 3% are listed in the table")) +
+  theme_void(base_size = 12) +
+  theme(plot.title = element_text(face = "bold"), plot.subtitle = element_text(colour = "grey35"),
+        strip.text = element_text(face = "bold", size = 12), legend.title = element_blank(),
+        legend.position = "bottom")
+ggsave(file.path(DIR_FIG, "Figura_TaxonomicCoverage.pdf"), fig_coverage, width = 10, height = 5.5,
+       device = if (capabilities("cairo")) cairo_pdf else "pdf")
+ggsave(file.path(PROJECT_DIR, "Figura_TaxonomicCoverage.png"), fig_coverage, width = 10, height = 5.5, dpi = 300)
+if (interactive()) print(fig_coverage)
+LOG("Figura salvata: Figura_TaxonomicCoverage.png (torte per famiglia; .pdf in output_R/figure_pdf)")
 
 # --- 12.2 output del metabarcoding
 barre <- function(dati, col, livelli, titolo) {
@@ -1034,10 +924,9 @@ barre <- function(dati, col, livelli, titolo) {
 }
 DFo <- DF %>% mutate(classe = cut(reads_final, c(0, 10000, 50000, 100000, Inf), right = FALSE,
                                   labels = c("< 10,000", "10,000-50,000", "50,000-100,000", "> 100,000")))
-p <- barre(DFo, "n_assign", 1:3, "A  Assignment categories\n    per sample") +
-  barre(DFo, "n_prey_min", 1:3, "B  Minimum number of distinct\n    prey taxa per sample") +
-  barre(DFo, "classe", levels(DFo$classe), "C  Prey reads per sample\n    after filtering") +
-  plot_layout(guides = "collect", widths = c(1, 1, 1.35)) & theme(legend.position = "bottom")
+p <- barre(DFo, "n_assign", 1:3, "A  Prey taxa (assignment categories)\n    per sample") +
+  barre(DFo, "classe", levels(DFo$classe), "B  Prey reads per sample\n    after filtering") +
+  plot_layout(guides = "collect", widths = c(1, 1.35)) & theme(legend.position = "bottom")
 salva(p, "Figura_OutputMetabarcoding", 6.2)
 
 # --- 12.3 FOO e RRA a confronto
@@ -1221,8 +1110,7 @@ salva(p, "RDA_triplot_final", 11.5)
 # 12b. FILE CON I NOMI DELLA VERSIONE PRECEDENTE (nella cartella di lavoro)
 #      Stessi nomi e stesso formato dello script precedente, cosi' le mappe di
 #      QGIS e gli altri file che li usano restano validi. Novita': la categoria
-#      Cervinae (solo MSV136) e, nei file delle torte, le colonne CERVINAE e
-#      NPREY_MIN (numero minimo di prede distinte).
+#      Cervinae (solo MSV136) e, nei file delle torte, la colonna CERVINAE.
 # ==============================================================================
 POP_IT <- c(Slovenia = "Slovenia", Croatia = "Croazia")
 ricodifica <- function(x, mappa) { y <- x; k <- x %in% names(mappa); y[k] <- unname(mappa[x[k]]); y }
@@ -1250,7 +1138,7 @@ torte_camp <- DFo %>% transmute(
   ROE = round(`Capreolus capreolus`, 3), RED = round(`Cervus elaphus`, 3), BOAR = round(`Sus scrofa`, 3),
   CHAMOIS = round(`Rupicapra rupicapra`, 3), CAPRINAE = round(Caprinae, 3),
   DOMESTIC = round(Bos + Capra + Ovis + `Ovis aries`, 3), LEPUS = round(Lepus, 3),
-  CERVINAE = round(Cervinae, 3), NTAXA = n_assign, NPREY_MIN = n_prey_min)
+  CERVINAE = round(Cervinae, 3), NTAXA = n_assign)
 write_csv(torte_camp, file.path(PROJECT_DIR, "Torte_campioni_103.csv"))
 torte_aree <- DFo %>% group_by(Study = Study_area) %>%
   summarise(N = n(), N_IND = n_distinct(Individual[!is.na(Individual)]),
@@ -1408,7 +1296,7 @@ for (i in seq_len(nrow(spec))) {
 }
 # versioni dei pacchetti per la sezione Software (con uno spazio iniziale, perche'
 # nel testo la macro segue direttamente il nome del pacchetto)
-for (pk in c("vegan", "permute", "MASS", "sandwich", "lme4", "ggplot2", "readr", "dplyr", "tidyr", "patchwork", "ggrepel")) {
+for (pk in c("vegan", "permute", "MASS", "ggplot2", "readr", "dplyr", "tidyr", "patchwork", "ggrepel")) {
   righe_tex <- c(righe_tex, sprintf("\\defres{ver.%s:str}{ %s}", pk, versione(pk)))
 }
 righe_tex <- c(righe_tex, sprintf("\\defres{ver.R:str}{%s}", as.character(getRversion())))
