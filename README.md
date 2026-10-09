@@ -1,9 +1,10 @@
-# ==============================================================================
+# ==============================================================================# ==============================================================================
 # DIET COMPOSITION AND ENVIRONMENTAL CORRELATES OF THE GREY WOLF
 # IN SLOVENIA AND CROATIA - SCRIPT UNICO DI ANALISI
 #
 # Alfio Tomarchio - Universita' di Bologna
-# Ultima revisione: 27 settembre 2026
+# Ultima revisione: 9 ottobre 2026 (FOO di gruppo degli ungulati selvatici identificati;
+#   sezione 10b: confronto tra campioni dello stesso individuo)
 #
 # COME SI USA
 #   1. Metti questo script in una cartella che contenga solo gli 8 file
@@ -11,7 +12,7 @@
 #      cartella di lavoro. In RStudio:
 #      Session > Set Working Directory > Choose Directory..., oppure
 #        setwd("C:/Users/OEM/Desktop/TESI MAGISTRALE LJUBLJANA ERASMUS/File definitivi 102")
-#   2. Esegui:  source("Script_Tesi_Lupo_COMPLETO.R", encoding = "UTF-8")
+#   2. Esegui:  source("Script_Tesi_Lupo_COMPLETO_9ottobre_finale.R", encoding = "UTF-8")
 #      (oppure il pulsante "Source" in alto a destra nell'editor di RStudio).
 #      NON eseguirlo riga per riga (Run, Ctrl+Invio, Ctrl+Alt+R): in quel modo R
 #      non si ferma agli errori e i risultati possono restare incompleti.
@@ -34,8 +35,8 @@
 #     Punti_102_per_QGIS.csv                 data e coordinate
 #     gruppi_geografici_102.csv              aree di studio, gruppi e branchi
 #   Scelte e numeri della tesi:
-#     assegnazioni_varianti.csv   assegnazione finale e ruolo di ogni variante
-#     specifica_macro.csv         elenco dei numeri citati nella tesi
+#     assegnazioni_varianti_7ottobre.csv   assegnazione finale e ruolo di ogni variante
+#     specifica_macro_9ottobre_finale.csv  elenco dei numeri citati nella tesi
 #   Facoltativi (se mancano, i relativi controlli vengono saltati; non servono
 #   per la tesi):
 #     Slovenia wolves FILE DEFINITIVO.csv, Croatian wolves FILE DEFINITIVO.csv
@@ -44,6 +45,12 @@
 #     numeri_risultati_provvisori.tex
 #
 # COSA E' CAMBIATO RISPETTO ALLA VERSIONE PRECEDENTE
+#   - 07/10/2026 (call del 6/10): i due MOTU assegnati a Eukaryota (1.065 e 40
+#     reads, solo in M1MXP, campione sotto le 2.000 reads) non sono piu'
+#     attribuiti a Bos taurus ma restano sopra la famiglia e sono tolti: legge
+#     assegnazioni_varianti_7ottobre.csv. Cambia solo la composizione per
+#     famiglia della Slovenia (Figura_TaxonomicCoverage: Bovidae 8,27%); i 102
+#     campioni e tutte le analisi restano identici.
 #   - Le matrici si ricostruiscono dalle tabelle delle varianti, con filtri e
 #     soglia applicati dallo script, invece di partire dai FILE DEFINITIVO.
 #   - MSV136: ripristinati 45 reads di capriolo; 86 reads restano Cervinae non
@@ -97,9 +104,9 @@ FILE_PUNTI     <- "Punti_102_per_QGIS.csv"                # date e coordinate (1
 FILE_COV_SLO   <- "Taxonomic_coverage_Slovenia.csv"       # tabella delle varianti
 FILE_COV_CRO   <- "Taxonomic_coverage_Croatia.csv"        # tabella delle varianti
 # --- file nuovi (26/09/2026) --------------------------------------------------
-FILE_ASSEGN    <- "assegnazioni_varianti.csv"
+FILE_ASSEGN    <- "assegnazioni_varianti_7ottobre.csv"   # 07/10/2026: i due MOTU Eukaryota (1.065 e 40 reads) non attribuibili
 FILE_GRUPPI    <- "gruppi_geografici_102.csv"             # gruppi e branchi (102 campioni)
-FILE_SPEC      <- "specifica_macro.csv"
+FILE_SPEC      <- "specifica_macro_9ottobre_finale.csv"   # 09/10/2026: + FOO di gruppo e confronto entro individuo (within.*)
 # --- facoltativi: se mancano, i controlli relativi vengono saltati -------------
 FILE_SLO       <- "Slovenia wolves FILE DEFINITIVO.csv"   # solo confronto
 FILE_CRO       <- "Croatian wolves FILE DEFINITIVO.csv"   # solo confronto
@@ -623,6 +630,9 @@ for (a in AREE) {
   }
   wild <- rowSums(s[, c("Cervus elaphus", "Capreolus capreolus", "Sus scrofa", "Rupicapra rupicapra")])
   put(paste0("rra.", ab(a), ".wildresolved"), mean(wild))
+  # 09/10/2026: FOO di gruppo = % di campioni con almeno un ungulato selvatico identificato
+  put(paste0("foo.", ab(a), ".wildresolved"), 100 * mean(wild > 0))
+  put(paste0("det.", ab(a), ".wildresolved"), sum(wild > 0))
   put(paste0("rra.", ab(a), ".domestic"), mean(rowSums(s[, DOMESTIC])))
   put(paste0("rra.", ab(a), ".domestic_plus_caprinae"), mean(rowSums(s[, c(DOMESTIC, "Caprinae")])))
   put(paste0("rra.", ab(a), ".wild_plus_caprinae"), mean(wild + s$Caprinae))
@@ -879,6 +889,64 @@ put("grp.slo.perm.df1", pgs$Df[1]); put("grp.slo.perm.df2", pgs$Df[2]); put("grp
 
 
 # ==============================================================================
+# 10b. CAMPIONI DELLO STESSO INDIVIDUO (aggiunto il 09/10/2026; descrittivo)
+#      Entro ciascuna area, le coppie di campioni dello stesso individuo sono
+#      confrontate con le coppie di campioni di individui diversi:
+#      - percentuale di coppie con la stessa categoria dominante (DF$dominant);
+#      - dissimilarita' di Bray-Curtis media tra i profili trasformati con
+#        Hellinger (la stessa matrice DM della sezione 7).
+#      Esclusi i campioni senza individuo assegnato (MSV164). Nessun test
+#      statistico: e' una descrizione (sezioni 2.7, 3.6 e 4.5 della tesi).
+# ==============================================================================
+DMm <- as.matrix(DM)
+dimnames(DMm) <- list(DF$Sample, DF$Sample)
+anno_r <- sub("^[0-9]+-[[:alpha:]]+-([0-9]+)$", "\\1", DF$Date)
+anno_r <- ifelse(nchar(anno_r) == 2, paste0("20", anno_r), anno_r)
+DF$DataRaccolta <- as.Date(sprintf("%s-%02d-%02d", anno_r, DF$Month,
+                                   as.integer(sub("^([0-9]+)-.*$", "\\1", DF$Date))))
+if (any(is.na(DF$DataRaccolta))) stop("Date non interpretate (sezione 10b): ",
+                                      paste(DF$Sample[is.na(DF$DataRaccolta)], collapse = ", "))
+righe_ind <- list()
+for (a in AREE) {
+  s <- DF[DF$Area == a & !is.na(DF$Individual), ]
+  cp <- t(combn(nrow(s), 2))
+  stesso_ind <- s$Individual[cp[, 1]] == s$Individual[cp[, 2]]
+  stesso_dom <- s$dominant[cp[, 1]] == s$dominant[cp[, 2]]
+  bc <- DMm[cbind(s$Sample[cp[, 1]], s$Sample[cp[, 2]])]
+  multi <- names(which(table(s$Individual) >= 2))
+  per_ind <- s %>% dplyr::filter(Individual %in% multi) %>% group_by(Individual) %>%
+    summarise(Area = first(as.character(Area)), Pack = first(Pack), n = n(),
+              dominant = paste(names(table(dominant)), as.integer(table(dominant)),
+                               sep = ": ", collapse = "; "),
+              same_dominant = n_distinct(dominant) == 1,
+              span_days = as.numeric(max(DataRaccolta) - min(DataRaccolta)),
+              .groups = "drop") %>%
+    arrange(desc(n), Individual)
+  righe_ind[[a]] <- per_ind
+  k <- function(x) paste0("within.", ab(a), ".", x)
+  put(k("n_ind_multi"), length(multi))
+  put(k("n_samples_multi"), sum(per_ind$n))
+  put(k("n_ind_samedom"), sum(per_ind$same_dominant))
+  put(k("pairs_same"), sum(stesso_ind))
+  put(k("pairs_diff"), sum(!stesso_ind))
+  put(k("samedom_same"), 100 * mean(stesso_dom[stesso_ind]))
+  put(k("samedom_diff"), 100 * mean(stesso_dom[!stesso_ind]))
+  put(k("bc_same"), mean(bc[stesso_ind]))
+  put(k("bc_diff"), mean(bc[!stesso_ind]))
+  put(k("span_median"), median(per_ind$span_days))
+  LOG(sprintf(paste0("Stesso individuo (%s): %d individui con almeno 2 campioni (%d campioni), ",
+                     "%d con la stessa categoria dominante in tutti i campioni; stessa dominante nel %.1f%% ",
+                     "delle coppie dello stesso individuo e nel %.1f%% di quelle di individui diversi; ",
+                     "Bray-Curtis medio %.2f contro %.2f; intervallo mediano tra i campioni %.0f giorni"),
+              a, length(multi), sum(per_ind$n), sum(per_ind$same_dominant),
+              100 * mean(stesso_dom[stesso_ind]), 100 * mean(stesso_dom[!stesso_ind]),
+              mean(bc[stesso_ind]), mean(bc[!stesso_ind]), median(per_ind$span_days)))
+}
+print(bind_rows(righe_ind), n = Inf, width = Inf)
+write_csv(bind_rows(righe_ind), file.path(DIR_TAB, "campioni_stesso_individuo.csv"))
+
+
+# ==============================================================================
 # 11. DETTAGLI USATI NEL TESTO
 # ==============================================================================
 cap <- DF[DF$Caprinae > 0, ]
@@ -899,7 +967,7 @@ put("cro.south45", sum(DF$Area == "Croatia" & DF$Latitude < 45))
 COL_AREA <- c("Slovenia" = "#1F7FB5", "Croatia" = "#C73E1D")
 GRP <- tibble(
   key   = c("ROE", "RED", "CERVINAE", "BOAR", "CHAMOIS", "CAPRINAE", "DOMESTIC", "LEPUS"),
-  label = c("Roe deer", "Red deer", "Cervinae (unresolved)", "Wild boar", "Northern chamois",
+  label = c("Roe deer", "Red deer", "Cervinae (unresolved)", "Wild boar", "Chamois",
             "Caprinae (unresolved)", "Taxa assigned to domestic livestock", "Lepus sp."),
   fill  = c("#eda100", "#8c510a", "#f3ebe1", "#4a3aa7", "#00a5a8", "#c51b7d", "#7570b3", "#4d9221"),
   edge  = c("white", "white", "#8c510a", "white", "white", "white", "white", "white"))
@@ -951,28 +1019,28 @@ write_csv(coverage_fam, file.path(DIR_TAB, "copertura_tassonomica_famiglie.csv")
 tot_cov <- coverage_fam %>% distinct(Area, tot)
 etichette_cov <- setNames(paste0(tot_cov$Area, "\n", formatC(tot_cov$tot, format = "d", big.mark = ","), " reads"),
                           as.character(tot_cov$Area))
+# senza titolo (va nella didascalia), alla larghezza della pagina come le altre figure;
+# percentuali >= 10% dentro la fetta, tra 3% e 10% appena fuori, sotto il 3% nella tabella
 fig_coverage <- ggplot(coverage_fam, aes(x = 1, y = pct, fill = Famiglia)) +
-  geom_col(width = 1, colour = "white", linewidth = 0.6) +
-  geom_text(aes(label = ifelse(pct >= 3, sprintf("%.1f%%", pct), "")),
-            position = position_stack(vjust = 0.5), colour = "white", fontface = "bold", size = 3.6) +
+  geom_col(width = 1, colour = "white", linewidth = 0.5) +
+  geom_text(aes(label = ifelse(pct >= 10, sprintf("%.1f%%", pct), "")),
+            position = position_stack(vjust = 0.5), colour = "white", fontface = "bold", size = 2.6) +
+  geom_text(aes(x = 1.66, label = ifelse(pct >= 3 & pct < 10, sprintf("%.1f%%", pct), "")),
+            position = position_stack(vjust = 0.5), colour = "grey15", size = 2.5) +
   coord_polar(theta = "y", direction = -1) +
+  scale_x_continuous(limits = c(0.5, 1.8)) +
   facet_wrap(~ Area, labeller = labeller(Area = etichette_cov)) +
   scale_fill_manual(values = COL_FAMIGLIE, breaks = ORDINE_FAMIGLIE, drop = TRUE) +
-  labs(title = "Taxonomic coverage of the unfiltered sequence data",
-       subtitle = paste("Share of sequence reads by family, all sequenced samples;",
-                        "slices below 3% are listed in the table")) +
-  theme_void(base_size = 12) +
-  theme(plot.title = element_text(face = "bold"), plot.subtitle = element_text(colour = "grey35"),
-        strip.text = element_text(face = "bold", size = 12), legend.title = element_blank(),
-        legend.position = "bottom")
-ggsave(file.path(DIR_FIG, "Figura_TaxonomicCoverage.pdf"), fig_coverage, width = 10, height = 5.5,
-       device = if (capabilities("cairo")) cairo_pdf else "pdf")
-ggsave(file.path(PROJECT_DIR, "Figura_TaxonomicCoverage.png"), fig_coverage, width = 10, height = 5.5, dpi = 300)
-if (interactive()) print(fig_coverage)
-LOG("Figura salvata: Figura_TaxonomicCoverage.png (torte per famiglia; .pdf in output_R/figure_pdf)")
+  guides(fill = guide_legend(nrow = 2, byrow = TRUE)) +
+  theme_void(base_size = 8.5) +
+  theme(strip.text = element_text(face = "bold", size = 8.5, margin = margin(b = 2)),
+        legend.title = element_blank(), legend.position = "bottom",
+        legend.key.size = unit(0.35, "cm"))
+p_cov <- fig_coverage
+salva(p_cov, "Figura_TaxonomicCoverage", 8.2)
 
 # --- 12.2 output del metabarcoding
-barre <- function(dati, col, livelli, titolo) {
+barre <- function(dati, col, livelli, titolo, ylab = NULL) {
   # position_dodge con la stessa larghezza per barre ed etichette; l'ordine dei
   # livelli (Croatia, Slovenia) mette la Slovenia sopra, la legenda resta Slovenia-Croatia
   d <- dati %>% mutate(v = factor(.data[[col]], levels = livelli)) %>% count(Area, v, .drop = FALSE) %>%
@@ -983,12 +1051,14 @@ barre <- function(dati, col, livelli, titolo) {
     geom_text(aes(label = sprintf("%.1f", pct)), position = position_dodge(width = 0.75), hjust = -0.15, size = 2.4) +
     scale_fill_manual(values = COL_AREA, breaks = AREE, labels = lab_area_n) +
     scale_x_continuous(limits = c(0, 108), expand = c(0, 0)) +
-    labs(title = titolo, x = "Samples (%)", y = NULL) + tema
+    labs(title = titolo, x = "Samples (%)", y = ylab) + tema
 }
 DFo <- DF %>% mutate(classe = cut(reads_final, c(0, 10000, 50000, 100000, Inf), right = FALSE,
                                   labels = c("< 10,000", "10,000-50,000", "50,000-100,000", "> 100,000")))
-p <- barre(DFo, "n_assign", 1:3, "A  Prey taxa (assignment categories)\n    per sample") +
-  barre(DFo, "classe", levels(DFo$classe), "B  Prey reads per sample\n    after filtering") +
+p <- barre(DFo, "n_assign", 1:3, "A  Prey taxa (assignment categories)\n    per sample",
+           "Prey taxa per sample") +
+  barre(DFo, "classe", levels(DFo$classe), "B  Prey reads per sample\n    after filtering",
+        "Prey reads per sample") +
   plot_layout(guides = "collect", widths = c(1, 1.35)) & theme(legend.position = "bottom")
 salva(p, "Figura_OutputMetabarcoding", 6.2)
 
