@@ -1,4 +1,4 @@
-# ==============================================================================# ==============================================================================
+# ==============================================================================
 # DIET COMPOSITION AND ENVIRONMENTAL CORRELATES OF THE GREY WOLF
 # IN SLOVENIA AND CROATIA - SCRIPT UNICO DI ANALISI
 #
@@ -916,9 +916,12 @@ for (a in AREE) {
   multi <- names(which(table(s$Individual) >= 2))
   per_ind <- s %>% dplyr::filter(Individual %in% multi) %>% group_by(Individual) %>%
     summarise(Area = first(as.character(Area)), Pack = first(Pack), n = n(),
-              dominant = paste(names(table(dominant)), as.integer(table(dominant)),
-                               sep = ": ", collapse = "; "),
+              # prima il controllo, poi il riepilogo testuale con un nome diverso:
+              # in summarise() una colonna nuova chiamata 'dominant' sostituirebbe
+              # quella dei campioni per le righe successive
               same_dominant = n_distinct(dominant) == 1,
+              dominanti = paste(names(table(dominant)), as.integer(table(dominant)),
+                                sep = ": ", collapse = "; "),
               span_days = as.numeric(max(DataRaccolta) - min(DataRaccolta)),
               .groups = "drop") %>%
     arrange(desc(n), Individual)
